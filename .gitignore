@@ -18,6 +18,19 @@
 *.[fF][lL][aA][cC]
 *.[oO][gG][gG]
 
+# Downloaded AI model weights and local backup archives
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
 # Dependencies, build output, and caches
 .venv/
 venv/
