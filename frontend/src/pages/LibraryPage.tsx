@@ -10,7 +10,7 @@ interface LibraryPageProps {
 export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState('');
-  const [modeFilter, setModeFilter] = useState<'all' | 'viral' | 'ranking'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'viral' | 'ranking' | 'discovery' | 'autopilot'>('all');
   const [loading, setLoading] = useState(true);
 
   const fetchList = async () => {
@@ -54,7 +54,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
       <div className="max-w-4xl w-full flex flex-col gap-6 pb-16">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900">Project Library</h1>
-          <p className="text-xs text-zinc-500">All your generated Viral Clips and Ranking Videos.</p>
+          <p className="text-xs text-zinc-500">Your manual productions and Autopilot stories.</p>
         </div>
 
         {/* Filter Bar */}
@@ -71,7 +71,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
           </div>
 
           <div className="flex items-center gap-1 p-1 rounded-xl bg-zinc-100 border border-zinc-200/60 self-start text-xs font-medium">
-            {(['all', 'viral', 'ranking'] as const).map((tab) => (
+            {(['all', 'autopilot', 'viral', 'discovery', 'ranking'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setModeFilter(tab)}
@@ -81,7 +81,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
                     : 'text-zinc-500 hover:text-zinc-900'
                 }`}
               >
-                {tab === 'all' ? 'All Projects' : tab === 'viral' ? 'Viral Clips' : 'Ranking Videos'}
+                {tab === 'all' ? 'All' : tab === 'viral' ? 'Viral Clips' : tab === 'ranking' ? 'Ranking' : tab === 'discovery' ? 'Viral Discovery' : 'Autopilot'}
               </button>
             ))}
           </div>
@@ -131,7 +131,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
                     <div className="flex flex-col gap-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-zinc-100 text-zinc-700">
-                          {proj.mode === 'viral' ? 'Viral' : 'Ranking'}
+                          {proj.mode === 'viral' ? 'Viral' : proj.mode === 'discovery' ? 'Discovery' : 'Ranking'}
                         </span>
                         <span className="text-xs text-zinc-400">·</span>
                         <span className="text-xs text-zinc-500 font-medium">

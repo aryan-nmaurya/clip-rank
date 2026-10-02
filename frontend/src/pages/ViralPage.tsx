@@ -13,7 +13,7 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
   const [provider, setProvider] = useState('auto');
   const [seconds, setSeconds] = useState(25);
   const [layout, setLayout] = useState('fit');
-  const [captions, setCaptions] = useState(true);
+  const captions = true;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,7 +135,7 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
                   onChange={(e) => setProvider(e.target.value)}
                   className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-800 focus:outline-none font-medium"
                 >
-                  <option value="auto">Auto · AI or visual metrics</option>
+                  <option value="auto">Auto · connected vision model</option>
                   <option value="gemini">Google AI Studio</option>
                   <option value="openai">OpenAI</option>
                   <option value="local">Local · vision model required</option>
@@ -191,13 +191,13 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
               <div className="flex flex-col gap-1.5">
                 <span className="font-medium text-zinc-600">Aspect ratio</span>
                 <div className="p-2.5 rounded-lg border border-zinc-100 bg-zinc-50 text-zinc-500 font-medium">
-                  9:16 Vertical (720 × 1280)
+                  9:16 Vertical (1080 × 1920)
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
                 <span className="font-medium text-zinc-600">Speech captions</span>
-                <label className="flex items-center gap-2 p-2.5 rounded-lg border border-zinc-100"><input type="checkbox" checked={captions} onChange={e => setCaptions(e.target.checked)} />Timed words · yellow highlight</label>
+                <p className="p-2.5 rounded-lg border border-zinc-100 text-xs">Included · real word timing · selective emphasis</p>
               </div>
 
               <div className="flex flex-col gap-1.5">

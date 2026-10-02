@@ -11,7 +11,8 @@ class TopicParser:
         'Top 5 Parkour Fails' -> ('Parkour Fails', 5)
         """
         clean = raw_text.strip()
-        m = re.search(r'\b(?:top|best)\s*([0-9]{1,2})\b\s*(.*)', clean, re.IGNORECASE)
+        clean = re.sub(r'^ranking\s+', '', clean, flags=re.I)
+        m = re.match(r'(?:top|best)\s*([0-9]{1,2})\b\s*(.*)', clean, re.IGNORECASE)
         if m:
             count = int(m.group(1))
             extracted_topic = m.group(2).strip()

@@ -6,12 +6,14 @@ import { RankingPage } from './pages/RankingPage';
 import { JobProgressPage } from './pages/JobProgressPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { SettingsPage } from './pages/SettingsPage';
+import {DiscoveryPage} from './pages/DiscoveryPage';
+import {AutopilotPage} from './pages/AutopilotPage';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { AIStatus } from './types';
 import { getAIStatus } from './api';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'progress' | 'library' | 'settings'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'progress' | 'library' | 'settings'>('home');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
@@ -67,8 +69,10 @@ export function App() {
         )}
 
         {currentTab === 'ranking' && (
-          <RankingPage onStartJob={handleStartJob} />
+          <RankingPage onStartJob={handleStartJob} aiStatus={aiStatus} onOpenSettings={() => setCurrentTab('settings')} />
         )}
+        {currentTab==='discovery'&&<DiscoveryPage onStartJob={handleStartJob}/>}
+        {currentTab==='autopilot'&&<AutopilotPage onOpenProject={handleOpenProject} onSettings={()=>setCurrentTab('settings')}/>}
 
         {currentTab === 'progress' && activeProjectId && activeJobId && (
           <JobProgressPage

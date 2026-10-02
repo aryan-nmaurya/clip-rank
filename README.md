@@ -1,9 +1,11 @@
-# AI Shorts Creator
+# ClipRank
+
+The local-first autonomous studio adds **Viral Discovery** and **Autopilot** for an **Extreme, Unbelievable & Funny Moments** channel. See [studio setup and deployment status](Docs/AUTONOMOUS_STUDIO.md). The Vercel Hobby + Supabase control plane is prepared in `cloud/`; video compute stays on the Mac. Hobby permits personal, non-commercial use only.
 
 Two workflows for creating vertical reels from real footage:
 
-- **Viral Clips:** upload a source video or paste a public video URL. Analyze motion and clarity, inspect sampled frames with a configured AI model, transcribe actual speech, and render distinct highlights with timed captions and original audio.
-- **Ranking Video:** discover public short videos by topic, supply source URLs, or upload several clips. Rank their strongest moments and create a #N → #1 countdown with a bold title and persistent colored list, inspired by the supplied cat-ranking reference. Original audio is the default; brief narration is optional.
+- **Viral Clips:** upload a source video or paste a public video URL. Find complete standalone stories using connected vision, preserve actual dialogue, remove filler without cutting midword, and render finished highlights with timed captions and mixed original audio. Silent action footage receives grounded neural narration.
+- **Ranking Video:** discover individual videos across selected sites, supply public source URLs, or upload several raw clips. Screen out existing rankings before extracting moments and produce **two distinct #N → #1 Shorts**. Short A favors fast entertainment; Short B favors suspense and uses alternative verified sources when available. Both require natural neural commentary, timed captions, safe rank graphics and finished-video QC.
 
 ## Run
 
@@ -18,30 +20,56 @@ cd ..
 ./run_app.sh
 ```
 
-Open [the local app](http://localhost:8000). FFmpeg and FFprobe must be available on PATH. macOS `say` is used only when narration is enabled.
+Open [the local app](http://localhost:8000). FFmpeg and FFprobe must be available on PATH. Default narration uses [Pocket TTS](https://github.com/kyutai-labs/pocket-tts), integrated into the existing backend and running on CPU. Explicitly install local voice assets with `PYTHONPATH=backend .venv/bin/python backend/setup_pocket_tts.py`. Preview Alba, Marius or Javert in Ranking or Settings. Online Edge voices and optional Kokoro remain available. Pocket TTS generation stays offline after setup and fails clearly if assets or accurate word timings are missing.
+
+Both production workflows require a connected image-capable model. macOS Vision OCR (requires Command Line Tools), or Tesseract on other platforms, adds ranking-overlay screening. The macOS OCR helper compiles into ignored `storage/tools` on first use. OCR and motion measurements alone cannot verify a requested topic.
 
 `run_app.sh` checks backend dependencies and rebuilds the frontend on each launch. Python 3.11–3.14 is supported by the installed dependencies; PyAV is bounded below 17 for compatibility with faster-whisper 1.2.1.
 
 ## Analysis and captions
 
-Configure Gemini, OpenAI, or an **installed image-capable Ollama model** in Settings for frame-based semantic scoring. Auto uses a configured provider, then local AI, then measured visual metrics. An explicitly selected unavailable provider reports an error rather than switching to another provider. Provider readiness indicates configuration, not a successful authenticated request.
+Connect Gemini or an **installed image-capable Ollama model** in Settings. Enter the Gemini key/model (default `gemini-3.1-flash-lite`), or your Ollama server base URL/model name, use **Test vision connection**, then save. The test checks an actual image. The local connection check reads `/api/tags` and `/api/show` and requires `vision` capability. It never pulls or installs a model. The default local model field is [`qwen3-vl:4b`](https://ollama.com/library/qwen3-vl:4b); replace it with the exact name of your installed vision model. Setup can be saved before either service is connected.
 
-Without an AI model, clips are selected from measured motion and clarity. This fallback is identified in results. Retention scores are estimates; they do not promise views or virality. Source URLs, creators, chosen timestamps, scores, and reasons remain available with each result.
+Auto checks connected local vision first, then configured cloud providers. OpenAI remains supported as an additional provider. Cloud key readiness indicates configuration, not a successful authenticated request; use the image test for Gemini. An explicitly selected unavailable provider reports an error.
 
-Real speech recognition uses faster-whisper's base model, downloaded into `storage/models` on first use. Captions are built from recognized word timestamps and rendered with Pillow as a transparent video track, so FFmpeg does not need libass. Missing speech or unavailable transcription produces no invented captions. Silent videos can still render.
+**Ranking has no motion-only fallback.** It stops before downloading sources if no vision engine is connected. Candidate cuts must explicitly match the requested subject, action and outcome with at least 0.85 model relevance/confidence and a complete visible event without graphic injury close-ups. Missing fields, uncertain decisions and omitted candidates are rejected. A second review checks the exact cut with its chosen framing, label and commentary before export. For “Parkour fails,” a successful stunt or preparation alone cannot qualify. Descriptions come from frames, not uploader titles. These checks reduce mismatch; model judgments can still be wrong, so inspect the export.
+
+Viral Clips also require vision to verify a complete standalone story. Motion and clarity propose windows; they cannot approve production exports. Retention scores and model confidence are estimates, not guarantees of accuracy, views or virality. Source URLs, creators, timestamps, visible evidence, scores and reasons remain available with results.
+
+Real speech recognition uses faster-whisper's base model, downloaded into `storage/models` on first use. Captions are built from recognized word timestamps and rendered with Pillow as a transparent video track, so FFmpeg does not need libass. Speech without actual word timing is rejected rather than given estimated captions. Unavailable transcription stops production. Pocket TTS captions use measured local Whisper timings; online narration uses speech-service word boundaries. Speech stays at natural speed and lines are rewritten when they do not fit.
 
 ## Source and export behavior
 
 - Public URLs use yt-dlp to download actual footage. Failed/private/unavailable downloads produce actionable errors; there is no demo-footage fallback.
-- Automatic discovery searches YouTube Shorts and excludes existing ranking compilations. At least N distinct usable sources are required for Top N.
-- Ranking entries play from the lowest selected score (#N) to the highest (#1). A complete 3–12-second moment is selected for each source; the editor does not repeat footage to fill time.
+- Automatic discovery searches YouTube and the public Dailymotion video API, with indexed-video search for Reddit, TikTok, Instagram, and Vimeo. Select sites in the Ranking page. These sites may block search/downloads or require sign-in; failures are reported and public links/uploads remain available. A reel need not contain every selected site if usable clips are unavailable there.
+- Every ranking input, including pasted links and uploads, is checked for ranking/countdown/compilation titles and tags. Source-wide sampled frames are OCR-screened for numbered lists and changing countdown badges, and the connected vision model checks for rankings and unrelated montages. Rejected sources and reasons appear with results. At least N distinct sources must pass topic, source and final-cut screening; rejected footage never fills an empty rank.
+- Commentary builds curiosity from verified visible setup without announcing the payoff early. The first line is an immediate topic hook; later lines vary their bridges. Titles from source uploads never become ranking descriptions. Source audio ducks smoothly during narration and returns afterward. Original rank-reveal effects are used selectively; no background music is added. Source credits, topic evidence, scripts and actual speech timings are retained.
+- Verified payoffs are reviewed together to establish distinct comparative scores with visible evidence, rather than reusing unrelated per-clip ratings. Ranking entries play from the lowest selected score (#N) to the highest (#1). A complete 3–12-second moment is selected for each source; the editor does not repeat footage to fill time.
 - Viral clips stay within the source's duration. Short videos may yield fewer distinct clips than requested.
-- Framing can preserve the full image over a blurred background or fill the frame with a center crop. Center cropping is not subject tracking; use full-frame mode when important action is near an edge.
-- Exports contain 720×1280 H.264 video at 30 fps and AAC audio, including a silent audio track for silent inputs. Exports are duration-checked and decoded before becoming ready.
+- Production preserves the complete source frame over a blurred background so action near an edge remains visible. Safe caption groups contain up to three words with selective keyword emphasis. This implementation does not perform subject tracking.
+- Exports contain **1080×1920 H.264 video at 30 fps and AAC stereo audio at 48 kHz**. The mix is mastered toward −14 LUFS with peak headroom. Mandatory final QC decodes the MP4, checks codecs/dimensions/duration, unexpected black or frozen sections, audio levels and actual word timing. Gemini reviews a proxy made from the finished video with its audio and must describe time-stamped evidence for every segment; local vision reviews final sampled frames with separate objective audio checks. Neither ranking video appears Ready until both pass. Repair is bounded to three attempts; a rejected result is withheld. Older exports without these checks cannot be downloaded or uploaded.
 - Media work runs outside the API loop. Up to two jobs run concurrently, with live progress and cooperative cancellation of FFmpeg work.
-- Uploaded sources are kept under `storage/projects` so regeneration works. Downloaded sources and temporary files are removed after each job. Finished MP4s and previews are kept under `storage/output`.
+- Uploaded sources are kept under `storage/projects` so regeneration works. Successful jobs delete their managed intermediates only after final files are verified and safely copied to `storage/output`. Failed jobs retain their workspace for diagnosis; startup clears abandoned directories after the configured retention period (12 hours by default). Cleanup cannot escape managed job storage or follow an outside symlink. Finished MP4s/previews and lightweight scripts, ranking metadata and provenance remain.
 
 Only process footage you have permission to use. Public availability does not grant reuse rights.
+
+## Direct YouTube upload
+
+Finished clip cards have **Upload to YouTube**. Once your channel is connected, that button transfers the actual MP4 privately from the backend, without navigating away. The selected visibility is released only after a confirmed copyright review. Progress, errors, retry and the completed video link appear on the same card. Expand **Upload details** to change the title, description, visibility or audience before uploading. Defaults are Private and Not made for kids; set the appropriate audience for your content. Source URLs and creator credits are appended automatically.
+
+One-time setup in Settings → **YouTube direct upload**:
+
+1. Enable [YouTube Data API v3](https://console.cloud.google.com/apis/library/youtube.googleapis.com) in your Google Cloud project.
+2. Configure OAuth consent and, if your app is in Testing, add your Google account as a test user.
+3. Create an OAuth client with application type **Desktop app**. Download its client JSON and choose it in Settings.
+4. Click **Connect YouTube** and complete Google authorization in the sign-in tab. The callback is `http://127.0.0.1:8000/api/youtube/callback`. Choose the account/channel you want to upload to. This initial authorization is the only browser navigation; uploading does not redirect.
+5. Save your upload visibility and audience defaults. Each QC-approved ready clip can then be uploaded in one click.
+
+Authorization uses OAuth state, PKCE and upload/read-only channel scopes. Client credentials and refresh tokens stay in ignored `backend/data/youtube_connection.json` with owner-only file permissions; APIs never return tokens. The YouTube routes accept connections only from this computer. Disconnect removes local channel tokens; Google account permissions can also be revoked in your Google account settings.
+
+Transfers use [YouTube's resumable upload protocol](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol) in bounded chunks. Repeated clicks reuse the clip's upload record. An interrupted transfer or backend restart can be resumed with **Retry upload**; the app checks Google's existing session before sending remaining bytes and retains the original metadata/channel. Keep the MP4 unchanged until upload completes. If Google expires the session, the app reports that and requires another explicit retry to start a new session.
+
+[Google restricts uploads from unverified API projects to Private](https://developers.google.com/youtube/v3/docs/videos/insert); public uploads can require an API audit. The result shows the visibility actually returned by YouTube. Quota exhaustion, revoked authorization and missing channels are reported in the app. A successful transfer does not mean YouTube has finished processing the video. No live account upload is performed by the test suite.
 
 ## Verify
 
@@ -50,6 +78,10 @@ PYTHONPATH=backend .venv/bin/python -m pytest backend/tests -q
 cd frontend && npm run build
 ```
 
-Tests use isolated databases and explicit test footage. They verify source validation, real rendering, ranking order, bounds, caption timing, narration mixing, silent-video support, cancellation, and API responsiveness.
+Tests use isolated databases and explicit test footage. They verify source validation, real rendering, ranking order, topic/label rejection, strict vision responses, setup without model downloads, bounds, exact captions, distinct A/B scripts and source selection, preserved payoff boundaries, narration mixing, rejected black/frozen outputs, native stereo peak checks, cleanup containment, cancellation and API responsiveness. YouTube tests mock Google responses and verify OAuth state/PKCE, token refresh/storage, metadata/credits, chunk positions, duplicate clicks, lost-response recovery, restart recovery and local access restrictions. Vision decisions in rendering tests are explicitly mocked; live semantic accuracy must be verified after connecting your model.
+
+The normal launcher binds to this computer only and does not restart running jobs when source files change.
 
 The app API lives in `backend/app/api`, pipelines in `backend/app/pipelines`, and media/analysis helpers in `backend/app/media`. Existing design documents in `Docs` describe earlier plans; this README documents the current implementation.
+
+Generated media, local databases, model weights, dependency folders and archives are ignored by Git. Ignoring an already committed file does not remove it from older commits; use a reviewed history migration if a remote still rejects historical large objects.

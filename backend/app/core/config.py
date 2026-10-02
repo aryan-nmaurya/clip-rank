@@ -46,20 +46,20 @@ def detect_hardware_acceleration() -> str:
 HW_ACCEL = detect_hardware_acceleration()
 
 # Video Rendering Specifications
-VIDEO_WIDTH = 720
-VIDEO_HEIGHT = 1280
+VIDEO_WIDTH = 1080
+VIDEO_HEIGHT = 1920
 VIDEO_FPS = 30
-AUDIO_SAMPLE_RATE = 44100
+AUDIO_SAMPLE_RATE = 48000
 
 # Defaults
 DEFAULT_AI_PROVIDER = "auto"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_LOCAL_ENDPOINT = "http://localhost:11434"
-DEFAULT_LOCAL_MODEL = "qwen2.5:latest"
-DEFAULT_VOICE = "Samantha"
+DEFAULT_LOCAL_MODEL = "qwen3-vl:4b"
+DEFAULT_VOICE = "pocket:alba"
 DEFAULT_LANGUAGE = "en"
 TEMP_RETENTION_HOURS = 12
 MAX_CONCURRENT_JOBS = 2
-MAX_SOURCE_VIDEOS = 10
-MAX_SEARCH_RESULTS = 20
+MAX_SOURCE_VIDEOS = 20
+MAX_SEARCH_RESULTS = 40

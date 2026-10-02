@@ -1,7 +1,7 @@
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
-ProjectMode = Literal["viral", "ranking"]
+ProjectMode = Literal["viral", "ranking", "discovery"]
 
 JobStatus = Literal[
     "QUEUED",
@@ -35,10 +35,12 @@ class RankingCreateRequest(BaseModel):
     count: Optional[int] = Field(default=None, ge=3, le=10)
     ai_provider: Literal["auto", "gemini", "openai", "local"] = "auto"
     source_urls: List[str] = Field(default_factory=list, max_length=20)
-    narration: bool = False
-    layout: Literal["fill", "fit"] = "fill"
+    narration: Literal[True] = True
+    layout: Literal["fill", "fit"] = "fit"
     segment_duration: float = Field(default=7, ge=3, le=12)
-    voice: str = "Samantha"
+    voice: Optional[str] = None
+    source_platforms: List[Literal["youtube", "reddit", "dailymotion", "tiktok", "instagram", "vimeo"]] = Field(
+        default_factory=lambda: ["youtube", "reddit", "dailymotion"], min_length=1, max_length=6)
 
 class CandidateMoment(BaseModel):
     id: str
@@ -96,12 +98,12 @@ class ProjectResponse(BaseModel):
 class SettingsModel(BaseModel):
     ai_provider: str = "auto"
     gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.1-flash-lite"
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     local_endpoint: str = "http://localhost:11434"
-    local_model: str = "qwen2.5:latest"
-    default_voice: str = "Samantha"
+    local_model: str = "qwen3-vl:4b"
+    default_voice: str = "pocket:alba"
     language: str = "en"
     hardware_accel: str = "cpu"
     temp_retention_hours: int = 12
@@ -114,6 +116,7 @@ class AIStatusResponse(BaseModel):
     gemini_configured: bool
     openai_configured: bool
     active_model: str
+    ranking_ready: bool = False
     message: Optional[str] = None
 
 class DiagnosticsResponse(BaseModel):

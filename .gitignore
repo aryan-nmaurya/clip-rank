@@ -1,5 +1,6 @@
 # Generated videos, downloads, previews, model weights, and local job data
 /storage/
+/outputs/
 /backend/data/
 
 # Large video and audio assets
@@ -36,6 +37,9 @@
 venv/
 node_modules/
 /frontend/dist/
+/cloud/.next/
+/cloud/out/
+.vercel/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -56,3 +60,7 @@ __pycache__/
 !.env.example
 !.env.*.example
 .DS_Store
+# Google OAuth client downloads and authorization tokens
+client_secret*.json
+youtube_connection.json
+youtube_tokens*.json

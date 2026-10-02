@@ -2,6 +2,7 @@ import os
 import time
 import shutil
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 from app.core.config import (
@@ -19,7 +20,11 @@ class StorageManager:
     @staticmethod
     def get_job_temp_dir(job_id: str) -> Path:
         """Returns the isolated workspace directory for a job."""
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',job_id):
+            raise ValueError('Invalid managed job identifier.')
         job_dir = (TEMP_STORAGE_DIR / job_id).resolve()
+        if not job_dir.is_relative_to(TEMP_STORAGE_DIR.resolve()) or job_dir==TEMP_STORAGE_DIR.resolve():
+            raise ValueError('Job workspace escapes managed temporary storage.')
         for sub in ["downloads", "audio", "frames", "scenes", "transcripts", "voice", "renders"]:
             (job_dir / sub).mkdir(parents=True, exist_ok=True)
         return job_dir
@@ -52,8 +57,17 @@ class StorageManager:
         if not TEMP_STORAGE_DIR.exists():
             return
         cutoff = time.time() - (retention_hours * 3600)
+        # Studio work is durable: an offline upload or recoverable worker job
+        # owns its intermediate media until publication succeeds.
+        protected=set()
+        from app.core.database import get_connection
+        import sqlite3
+        try:
+            with get_connection() as conn:
+                protected={row['id'] for row in conn.execute("SELECT id FROM studio_tasks WHERE status NOT IN ('COMPLETE','ANALYTICS_PENDING','CANCELLED')")}
+        except sqlite3.OperationalError: pass
         for item in TEMP_STORAGE_DIR.iterdir():
-            if item.is_dir():
+            if item.name not in protected and item.is_dir() and not item.is_symlink():
                 try:
                     if item.stat().st_mtime < cutoff:
                         shutil.rmtree(item, ignore_errors=True)
@@ -64,8 +78,12 @@ class StorageManager:
     @staticmethod
     def move_final_clip(source_path: Path, mode: str, clip_id: str, extension: str = ".mp4") -> Path:
         """Moves a rendered short to permanent storage."""
+        if mode not in ('viral','ranking') or not re.fullmatch(r'[A-Za-z0-9_-]{1,220}',clip_id) or extension != '.mp4':
+            raise ValueError('Invalid final output identifier.')
         target_dir = VIRAL_OUTPUT_DIR if mode == "viral" else RANKING_OUTPUT_DIR
         target_dir.mkdir(parents=True, exist_ok=True)
         dest_path = target_dir / f"{clip_id}{extension}"
-        shutil.copy2(source_path, dest_path)
+        temporary = dest_path.with_suffix('.partial')
+        shutil.copy2(source_path, temporary)
+        temporary.replace(dest_path)
         return dest_path

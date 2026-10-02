@@ -30,12 +30,12 @@ def init_db():
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 ai_provider TEXT NOT NULL DEFAULT 'auto',
                 gemini_api_key TEXT,
-                gemini_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
+                gemini_model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-lite',
                 openai_api_key TEXT,
                 openai_model TEXT NOT NULL DEFAULT 'gpt-4o-mini',
                 local_endpoint TEXT NOT NULL DEFAULT 'http://localhost:11434',
-                local_model TEXT NOT NULL DEFAULT 'qwen2.5:latest',
-                default_voice TEXT NOT NULL DEFAULT 'Samantha',
+                local_model TEXT NOT NULL DEFAULT 'qwen3-vl:4b',
+                default_voice TEXT NOT NULL DEFAULT 'en-US-GuyNeural',
                 language TEXT NOT NULL DEFAULT 'en',
                 hardware_accel TEXT NOT NULL DEFAULT 'cpu',
                 temp_retention_hours INTEGER NOT NULL DEFAULT 12,
@@ -90,6 +90,24 @@ def init_db():
             );
         """)
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS youtube_uploads (
+                clip_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                metadata TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                file_mtime INTEGER NOT NULL,
+                session_uri TEXT,
+                video_id TEXT,
+                actual_privacy TEXT,
+                error TEXT,
+                updated_at TEXT NOT NULL
+            );
+        """)
+        conn.execute('CREATE TABLE IF NOT EXISTS copyright_checks (clip_id TEXT PRIMARY KEY, data TEXT NOT NULL)')
+
         row = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
         if not row:
             now = datetime.now(timezone.utc).isoformat()
@@ -113,13 +131,24 @@ def init_db():
                 TEMP_RETENTION_HOURS,
                 now,
             ))
+        # Migrate prior system-voice choices to their closest neural voice.
+        from app.tts.voice_engine import LEGACY_VOICES
+        for legacy, neural in LEGACY_VOICES.items():
+            conn.execute("UPDATE settings SET default_voice = ? WHERE default_voice = ?", (neural, legacy))
+        conn.execute("UPDATE settings SET local_model = ? WHERE local_model = 'qwen2.5:latest'", (DEFAULT_LOCAL_MODEL,))
+        conn.execute("UPDATE settings SET gemini_model = ? WHERE gemini_model = 'gemini-2.5-flash'", (DEFAULT_GEMINI_MODEL,))
     conn.close()
 
 def get_settings() -> Dict[str, Any]:
     conn = get_connection()
     row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
     conn.close()
-    return dict(row) if row else {}
+    result=dict(row) if row else {}
+    for name in ('gemini_api_key','openai_api_key'):
+        if result.get(name)==f'keychain:{name}':
+            from app.core.secrets import SecretVault
+            result[name]=SecretVault.get(name)
+    return result
 
 def update_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
     conn = get_connection()
@@ -132,6 +161,10 @@ def update_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
     values = []
     for k, v in updates.items():
         if k in allowed_fields:
+            if k in ('gemini_api_key','openai_api_key') and v:
+                from app.core.secrets import SecretVault
+                SecretVault.set(k,v)
+                v=f'keychain:{k}'
             fields.append(f"{k} = ?")
             values.append(v)
 
@@ -187,7 +220,9 @@ def list_projects(mode: Optional[str] = None, search: Optional[str] = None, stat
     clauses = []
     params = []
 
-    if mode and mode.lower() != "all":
+    if mode and mode.lower() == 'autopilot':
+        clauses.append("json_extract(input_data, '$.autopilot') = 1")
+    elif mode and mode.lower() != "all":
         clauses.append("mode = ?")
         params.append(mode.lower())
     if search:
@@ -358,3 +393,15 @@ def get_clip(clip_id: str) -> Optional[Dict[str, Any]]:
     row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def clip_passed_production_qc(clip) -> bool:
+    if not clip or clip.get('status') != 'READY':
+        return False
+    project = get_project(clip['project_id'])
+    result = project.get('result_data',{}) if project else {}
+    if not result.get('production_qc_passed'):
+        return False
+    records = result.get('variants') or result.get('moments',[])
+    return any(row.get('clip_id')==clip['id'] and row.get('qc',{}).get('passed') is True
+               and row.get('final_review',{}).get('passed') is True for row in records)

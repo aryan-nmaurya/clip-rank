@@ -1,10 +1,10 @@
 import React from 'react';
-import { Plus, Flame, Award, Video, Settings as SettingsIcon, Film, Activity, User, Home } from 'lucide-react';
+import { Plus, Flame, Award, Video, Settings as SettingsIcon, Film, Activity, User, Home, Compass, Bot } from 'lucide-react';
 import { AIStatus } from '../types';
 
 interface SidebarProps {
-  currentTab: 'home' | 'viral' | 'ranking' | 'progress' | 'library' | 'settings';
-  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'library' | 'settings') => void;
+  currentTab: 'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'progress' | 'library' | 'settings';
+  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'library' | 'settings') => void;
   aiStatus: AIStatus | null;
   onOpenDiagnostics: () => void;
 }
@@ -24,7 +24,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Film className="w-4 h-4 stroke-[2.2]" />
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sm tracking-tight text-zinc-900">AI Shorts Creator</span>
+            <span className="font-semibold text-sm tracking-tight text-zinc-900">ClipRank</span>
             <span className="text-[10px] text-zinc-400 font-medium tracking-wide uppercase">Autonomous Studio</span>
           </div>
         </div>
@@ -40,6 +40,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation */}
         <nav className="flex flex-col gap-1">
+          <button onClick={()=>onSelectTab('autopilot')} className={`w-full h-10 px-3 rounded-lg flex items-center gap-3 text-sm font-semibold ${currentTab==='autopilot'?'bg-cyan-950 text-white':'bg-cyan-50 text-cyan-950'}`}><Bot className="w-4 h-4"/>Autopilot</button>
+          <button onClick={()=>onSelectTab('discovery')} className={`w-full h-9 px-3 rounded-lg flex items-center gap-3 text-sm font-medium ${currentTab==='discovery'?'bg-zinc-100':'text-zinc-600 hover:bg-zinc-50'}`}><Compass className="w-4 h-4 text-cyan-700"/>Viral Discovery</button>
           <button
             onClick={() => onSelectTab('home')}
             className={`w-full h-9 px-3 rounded-lg flex items-center gap-3 text-sm font-medium transition-colors ${
@@ -128,7 +130,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-semibold text-zinc-800">Local Studio</span>
-            <span className="text-[10px] text-zinc-400">Offline & Fast</span>
+            <span className="text-[10px] text-zinc-400">Real footage & AI</span>
           </div>
         </div>
       </div>

@@ -2,7 +2,7 @@ import React from 'react';
 import { Check, Circle } from 'lucide-react';
 
 interface ProgressStagesProps {
-  mode: 'viral' | 'ranking';
+  mode: 'viral' | 'ranking' | 'discovery';
   status: string;
   progress: number;
 }
@@ -32,9 +32,17 @@ const VIRAL_STAGES: StageItem[] = [
   { id: 'captions', label: 'Adding dynamic captions', backendStatuses: ['EDITING', 'RENDERING'] },
   { id: 'cleanup', label: 'Cleaning temporary files', backendStatuses: ['CLEANING'] },
 ];
+const DISCOVERY_STAGES:StageItem[]=[
+  {id:'research',label:'Researching primary sources',backendStatuses:['RESEARCHING']},
+  {id:'writing',label:'Writing and fact-checking',backendStatuses:['SCRIPTING']},
+  {id:'voice',label:'Generating natural narration',backendStatuses:['VOICE']},
+  {id:'edit',label:'Creating original diagrams',backendStatuses:['EDITING']},
+  {id:'render',label:'Rendering finished video',backendStatuses:['RENDERING']},
+  {id:'qc',label:'Reviewing the final video',backendStatuses:['QC']},
+];
 
 export const ProgressStages: React.FC<ProgressStagesProps> = ({ mode, status, progress }) => {
-  const stages = mode === 'viral' ? VIRAL_STAGES : RANKING_STAGES;
+  const stages = mode === 'discovery' ? DISCOVERY_STAGES : mode === 'viral' ? VIRAL_STAGES : RANKING_STAGES;
 
   const getStageStatus = (stage: StageItem, index: number) => {
     if (status === 'COMPLETED') return 'completed';

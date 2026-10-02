@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from app.core.runtime import check_cancelled
 from app.media.ffmpeg_core import FFmpegCore
+from app.sources.errors import RankedSourceRejected
 
 logger = logging.getLogger("ai_shorts.ingestion")
 
@@ -35,7 +36,7 @@ class SourceIngestion:
         return destination_file
 
     @classmethod
-    def download_video(cls, url: str, destination_file: Path):
+    def download_video(cls, url: str, destination_file: Path, reject_rankings=False):
         """Download actual footage; unavailable sources never become demo videos."""
         cls.validate_url(url)
         try:
@@ -46,6 +47,19 @@ class SourceIngestion:
 
         def progress(_):
             check_cancelled()
+
+        rejected_metadata = {}
+
+        def match_filter(info, **_):
+            if (info.get("duration") or 0) > 7200:
+                return "Source exceeds two hours"
+            if reject_rankings:
+                from app.sources.ranking_policy import RankingSourcePolicy
+                reason = RankingSourcePolicy.metadata_reason(info)
+                if reason:
+                    rejected_metadata.update(reason=reason, title=info.get("title"))
+                return reason
+            return None
 
         options = {
             "format": "bv*[height<=1080]+ba/b[height<=1080]/best",
@@ -60,13 +74,18 @@ class SourceIngestion:
             "fragment_retries": 2,
             "max_filesize": 2 * 1024**3,
             "progress_hooks": [progress],
-            "match_filter": lambda info, **_: "Source exceeds two hours" if (info.get("duration") or 0) > 7200 else None,
+            "match_filter": match_filter,
         }
         try:
             with yt_dlp.YoutubeDL(options) as downloader:
                 info = downloader.extract_info(url, download=True)
+                if rejected_metadata:
+                    raise RankedSourceRejected(rejected_metadata["reason"], rejected_metadata.get("title"))
                 if not info:
                     raise ValueError("Source could not be downloaded.")
+                rejected = match_filter(info)
+                if rejected:
+                    raise RankedSourceRejected(rejected, info.get("title"))
                 path = Path(downloader.prepare_filename(info))
                 merged = destination_file.with_suffix(".mp4")
                 if merged.exists():
@@ -75,14 +94,20 @@ class SourceIngestion:
                     raise ValueError("Download did not produce a video file.")
                 cls.verify(path)
                 return path, {
-                    "source_id": info.get("id") or url,
+                    "source_id": f"{info.get('extractor_key') or 'web'}:{info.get('id') or url}",
                     "title": info.get("title") or "Source video",
                     "url": info.get("webpage_url") or url,
                     "creator": info.get("uploader") or "",
                     "view_count": info.get("view_count") or 0,
                     "like_count": info.get("like_count") or 0,
+                    "tags": info.get("tags") or [],
+                    "platform": info.get("extractor_key") or urlparse(url).hostname,
+                    "license": info.get('license') or 'unknown',
+                    "license_evidence_url": info.get('license_url'),
                 }
         except InterruptedError:
+            raise
+        except RankedSourceRejected:
             raise
         except Exception as exc:
             check_cancelled()

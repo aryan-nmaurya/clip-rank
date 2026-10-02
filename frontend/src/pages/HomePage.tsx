@@ -2,7 +2,7 @@ import React from 'react';
 import { Flame, Award, ArrowRight, Sparkles, Video, Play } from 'lucide-react';
 
 interface HomePageProps {
-  onSelectFlow: (flow: 'viral' | 'ranking') => void;
+  onSelectFlow: (flow: 'viral' | 'ranking' | 'discovery' | 'autopilot') => void;
 }
 
 export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
@@ -13,17 +13,18 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
         <div className="flex flex-col gap-2 text-center items-center">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-100 text-zinc-700 text-xs font-semibold uppercase tracking-wider mb-2">
             <Sparkles className="w-3.5 h-3.5 text-zinc-900" />
-            <span>AI Shorts Creator</span>
+            <span>ClipRank</span>
           </div>
           <h1 className="text-4xl font-extrabold tracking-tight text-zinc-900">
             What do you want to create?
           </h1>
           <p className="text-zinc-500 text-sm max-w-md">
-            Two ways to build your next reel: find highlights in a video, or discover and rank a collection of moments.
+            Find surprising visual moments, rank verified payoffs, or turn your own footage into finished Shorts.
           </p>
         </div>
 
-        {/* The Two Primary Workflows (Section 1 & 4) */}
+        <button onClick={()=>onSelectFlow('autopilot')} className="rounded-3xl bg-cyan-950 text-white text-left p-7"><h2 className="text-xl font-bold">Run your content studio</h2><p className="text-sm text-cyan-100 mt-2">Extreme, unbelievable & funny moments · Discovery, original commentary, copyright checks and publishing.</p><span className="inline-block mt-4 font-semibold text-sm">Open Autopilot →</span></button>
+        <button onClick={()=>onSelectFlow('discovery')} className="text-left rounded-2xl border bg-white p-6"><h2 className="font-bold text-lg">Viral Discovery</h2><p className="text-sm text-zinc-500 mt-1">Discover what to create. Discover extraordinary footage and produce original viral clips, rankings or commentary.</p></button>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Workflow A: Viral Clips */}
           <div
@@ -66,14 +67,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
                 <span className="text-xs font-bold text-amber-600 uppercase tracking-wider">Workflow B</span>
                 <h3 className="text-xl font-bold text-zinc-900 group-hover:text-zinc-950">Ranking Video</h3>
                 <p className="text-zinc-500 text-xs leading-relaxed">
-                  Find videos by topic or supply your own clips. Compare their strongest moments and create a countdown with a bold title, colored ranking list, and original audio.
+                  Find individual clips across sites, screen out existing rankings, and produce two distinct countdown Shorts with natural commentary, synchronized captions, and finished audio.
                 </p>
               </div>
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-zinc-100">
               <span className="text-xs font-semibold text-zinc-800 group-hover:text-zinc-950">
-                Enter topic → Finished #5 → #1 video
+                Enter topic → Two finished #5 → #1 Shorts
               </span>
               <div className="w-8 h-8 rounded-full bg-zinc-100 group-hover:bg-zinc-900 group-hover:text-white text-zinc-700 flex items-center justify-center transition-colors">
                 <ArrowRight className="w-4 h-4" />

@@ -1,7 +1,7 @@
 """Find moments using measured frames, then allow AI to reason over real evidence."""
 import numpy as np
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from app.core.runtime import run_process
 from app.media.ffmpeg_core import FFmpegCore
 from app.media.captions import font
@@ -9,7 +9,7 @@ from app.media.captions import font
 
 class MomentAnalyzer:
     @staticmethod
-    def analyze(video: Path, count=3, target_duration=25.0, segments=None, title="Source video"):
+    def analyze(video: Path, count=3, target_duration=25.0, segments=None, title="Source video", coverage=False):
         info = FFmpegCore.get_video_info(video)
         duration = info["duration"]
         if duration < 1:
@@ -57,6 +57,10 @@ class MomentAnalyzer:
                                "motion": round(motion, 4), "clarity": round(quality, 3),
                                "title": title, "reason": f"Visual estimate: motion {motion:.3f}, clarity {quality:.2f}; {end-start:.1f}s of source footage.",
                                "analysis_basis": "visual metrics"})
+        if coverage:
+            # Include the entire timeline, not just the busiest frames; failures can follow quiet preparation.
+            indices = np.linspace(0, len(candidates)-1, min(count, len(candidates))).round().astype(int)
+            return [candidates[i] for i in sorted(set(indices))]
         selected = []
         for item in sorted(candidates, key=lambda x: x["score"], reverse=True):
             if any(max(0, min(item["end"], s["end"]) - max(item["start"], s["start"])) > .25 * min(item["end"]-item["start"], s["end"]-s["start"]) for s in selected):
@@ -67,20 +71,26 @@ class MomentAnalyzer:
         return selected
 
     @staticmethod
-    def contact_sheet(video: Path, moments, output: Path):
+    def contact_sheet(video: Path, moments, output: Path, dense=False, layout=None):
         output.parent.mkdir(parents=True, exist_ok=True)
-        sheet = Image.new("RGB", (600, len(moments) * 148), "#18181b")
+        fractions = (.01, .1, .2, .3, .4, .5, .6, .7, .8, .9, .99) if dense else (.15, .5, .85)
+        cell_w, cell_h = (240, 340) if dense else (200, 148)
+        sheet = Image.new("RGB", (cell_w * len(fractions), len(moments) * cell_h), "#18181b")
         draw = ImageDraw.Draw(sheet)
         for i, moment in enumerate(moments):
-            draw.text((6, i * 148 + 4), f"ID {i}  {moment['start']:.1f}–{moment['end']:.1f}s", font=font(14), fill="white")
-            for j, fraction in enumerate((.15, .5, .85)):
+            draw.text((6, i * cell_h + 4), f"ID {i}  {moment['start']:.1f}–{moment['end']:.1f}s", font=font(14), fill="white")
+            for j, fraction in enumerate(fractions):
                 timestamp = moment["start"] + (moment["end"] - moment["start"]) * fraction
                 jpg = output.parent / f"{output.stem}_{i}_{j}.jpg"
                 FFmpegCore.extract_frame(video, jpg, timestamp)
                 with Image.open(jpg) as frame:
-                    frame.thumbnail((196, 112))
-                    sheet.paste(frame, (j * 200 + (196 - frame.width) // 2, i * 148 + 30))
+                    if layout == "fill":
+                        # Match the actual center crop between ranking title/footer bands.
+                        frame = ImageOps.fit(frame, (240, 325), centering=(.5, .5))
+                    frame.thumbnail((cell_w - 4, cell_h - 38))
+                    sheet.paste(frame, (j * cell_w + (cell_w - frame.width) // 2, i * cell_h + 30))
                 jpg.unlink(missing_ok=True)
+                draw.text((j * cell_w + 5, i * cell_h + cell_h - 20), f'{timestamp:.2f}s', font=font(14), fill='white')
         sheet.save(output)
         return output
 

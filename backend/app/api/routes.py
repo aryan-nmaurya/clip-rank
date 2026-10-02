@@ -5,7 +5,8 @@ import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Form, Depends
+from app.api.youtube_routes import local_access,local_mutation
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -26,6 +27,7 @@ from app.core.database import (
     create_job,
     get_job,
     get_clip,
+    clip_passed_production_qc,
 )
 from app.models.schemas import (
     ViralCreateRequest,
@@ -43,6 +45,7 @@ from app.storage.manager import StorageManager
 from app.sources.ingestion import SourceIngestion
 from app.core.runtime import run_blocking
 from app.media.ffmpeg_core import FFmpegCore
+from app.tts.voice_engine import TTSEngine
 
 router = APIRouter()
 job_engine = JobEngine.get_instance()
@@ -64,6 +67,7 @@ async def get_ai_status():
         gemini_configured=res["gemini_configured"],
         openai_configured=res["openai_configured"],
         active_model=res["active_model"],
+        ranking_ready=res["ranking_ready"],
     )
 
 def get_ffmpeg_version():
@@ -99,13 +103,113 @@ async def get_diagnostics():
 # Settings
 # -------------------------------------------------------------------
 
-@router.get("/settings")
+@router.get("/settings",dependencies=[Depends(local_access)])
 def api_get_settings():
-    return get_settings()
+    return public_settings(get_settings())
 
-@router.post("/settings")
+def public_settings(settings):
+    result=dict(settings)
+    for name in ('gemini_api_key','openai_api_key'):
+        result[name+'_configured']=bool(result.get(name))
+        result.pop(name,None)
+    return result
+
+@router.post("/settings",dependencies=[Depends(local_access),Depends(local_mutation)])
 def api_update_settings(updates: Dict[str, Any]):
-    return update_settings(updates)
+    updates={key:value for key,value in updates.items() if key not in ('gemini_api_key','openai_api_key') or value is not None}
+    if "default_voice" in updates:
+        try:
+            updates["default_voice"] = TTSEngine.resolve_voice(updates["default_voice"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    try: return public_settings(update_settings(updates))
+    except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+
+
+@router.get("/vision/connections")
+async def vision_connections():
+    settings = get_settings()
+    gemini, _, local = AIRouter.get_providers(settings)
+    return {"gemini": {"configured": await gemini.is_available(), "model": gemini.model,
+                        "message": "Key configured; use Test vision to check images and authentication." if await gemini.is_available() else "Add your Gemini API key when ready."},
+            "local": await local.connection_status()}
+
+
+@router.post("/vision/test")
+async def test_vision_connection(payload: Dict[str, Any]):
+    selected = payload.get("provider")
+    if selected not in {"gemini", "local"}:
+        raise HTTPException(400, "Select Gemini or local vision.")
+    settings = {**get_settings(), **{key: value for key, value in payload.items() if value is not None
+                                   if key in {"gemini_api_key", "gemini_model", "local_endpoint", "local_model"}}}
+    gemini, _, local = AIRouter.get_providers(settings)
+    provider = gemini if selected == "gemini" else local
+    if not await provider.is_available():
+        message = "Enter a Gemini API key to test vision." if selected == "gemini" else (await local.connection_status())["message"]
+        return {"passed": False, "message": message}
+    from PIL import Image, ImageDraw
+    from app.ai.ranking_verifier import parse_object
+    path = TEMP_STORAGE_DIR / "vision-tests" / f"{uuid.uuid4().hex}.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sample = Image.new("RGB", (500, 300), "white")
+    draw = ImageDraw.Draw(sample)
+    draw.ellipse((35, 75, 185, 225), fill="red")
+    draw.rectangle((235, 35, 310, 110), fill="blue")
+    draw.rectangle((360, 190, 435, 265), fill="blue")
+    sample.save(path)
+    try:
+        raw = await provider.analyze_images([path], 'Inspect the image. Return ONLY JSON: {"red_circles": <integer count>, "blue_squares": <integer count>}.')
+        try:
+            result = parse_object(raw)
+            passed = type(result.get("red_circles")) is int and type(result.get("blue_squares")) is int and result["red_circles"] == 1 and result["blue_squares"] == 2
+        except (ValueError, TypeError):
+            passed = False
+        return {"passed": passed, "message": "Vision test passed: model read the image correctly." if passed else "Vision test failed. Check the API key, endpoint, model name and image support."}
+    finally:
+        path.unlink(missing_ok=True)
+
+
+async def validate_ranking_vision(provider):
+    try:
+        await AIRouter.require_ranking_provider({**get_settings(), "ai_provider": provider})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def local_speech_access(request: Request):
+    local_access(request)
+    origin=request.headers.get('origin')
+    if origin and origin not in {f'http://{host}:{port}' for host in ('localhost','127.0.0.1') for port in (8000,5173)}:
+        raise HTTPException(403,'Speech is only available from the local app.')
+    if request.headers.get('sec-fetch-site')=='cross-site':
+        raise HTTPException(403,'Speech is only available from the local app.')
+
+
+@router.get('/speech/status',dependencies=[Depends(local_speech_access)])
+def speech_status():
+    from app.tts.pocket import PocketTTS
+    return PocketTTS.status()
+
+
+@router.get("/speech/preview/{voice}",dependencies=[Depends(local_speech_access)])
+async def preview_neural_voice(voice: str):
+    try:
+        voice = TTSEngine.resolve_voice(voice)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # Each request has its own file so simultaneous previews cannot overwrite one another.
+    from starlette.background import BackgroundTask
+    path = TEMP_STORAGE_DIR / "voice-previews" / f"{uuid.uuid4().hex}.wav"
+    def cleanup_preview():
+        # The server creates this path, never the caller or a generated script.
+        for suffix in ('.wav','.json','.alignment.json','.raw.wav'):
+            path.with_suffix(suffix).unlink(missing_ok=True)
+    try:
+        await TTSEngine.synthesize("Watch his left foot. The landing looks simple, until you see what happens next.", path, voice)
+    except ValueError as exc:
+        cleanup_preview()
+        raise HTTPException(503, str(exc)) from exc
+    return FileResponse(path, media_type="audio/wav", background=BackgroundTask(cleanup_preview))
 
 # -------------------------------------------------------------------
 # Project Creation: Workflow A (Viral Clips) & Workflow B (Ranking)
@@ -168,10 +272,13 @@ async def create_viral_project(video_url: Optional[str] = Form(None), count: int
     validate_provider(ai_provider)
     if layout not in {"fill", "fit"}:
         raise HTTPException(400, "Unknown framing layout.")
+    if not captions:
+        raise HTTPException(400, 'Production speech captions are mandatory.')
     video_url = video_url.strip() if video_url else None
     has_upload = bool(video_file and video_file.filename)
     if has_upload == bool(video_url):
         raise HTTPException(400, "Provide either one video URL or one uploaded file.")
+    await validate_ranking_vision(ai_provider)
     project_id = f"proj_v_{uuid.uuid4().hex[:12]}"
     source = validate_urls([video_url])[0] if video_url else await save_upload(video_file, project_id)
     source_title = Path(video_file.filename).stem if has_upload else "Video highlights"
@@ -191,22 +298,38 @@ async def create_ranking_project(req: RankingCreateRequest):
     if urls and len(set(urls)) < count:
         raise HTTPException(400, f"Top {count} needs at least {count} distinct source links.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
+    overrides = req.model_dump()
+    if req.voice:
+        try:
+            overrides["default_voice"] = TTSEngine.resolve_voice(req.voice)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    await validate_ranking_vision(req.ai_provider)
     return enqueue_project(project_id, "ranking", f"Ranking {topic}", {
-        **req.model_dump(), "topic": topic, "count": count, "source_urls": urls,
-        "default_voice": req.voice})
+        **overrides, "topic": topic, "count": count, "source_urls": urls})
 
 
 @router.post("/projects/ranking/upload")
 async def create_ranking_upload(topic: str = Form(...), count: int = Form(5),
-                                ai_provider: str = Form("auto"), narration: bool = Form(False),
-                                layout: str = Form("fill"), segment_duration: float = Form(7),
+                                ai_provider: str = Form("auto"), narration: bool = Form(True),
+                                layout: str = Form("fit"), segment_duration: float = Form(7),
+                                voice: Optional[str] = Form(None),
                                 video_files: List[UploadFile] = File(...)):
     if not topic.strip() or len(topic) > 180 or not 3 <= count <= 10 or not 3 <= segment_duration <= 12:
         raise HTTPException(400, "Provide a topic, 3–10 ranks, and 3–12 seconds per clip.")
     validate_provider(ai_provider)
+    if not narration:
+        raise HTTPException(400, 'Production ranking requires original narration and timed captions.')
     if layout not in {"fill", "fit"} or not count <= len(video_files) <= 20:
         raise HTTPException(400, f"Upload between {count} and 20 distinct videos and choose a valid layout.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
+    voice_settings = {}
+    if voice:
+        try:
+            voice_settings["default_voice"] = TTSEngine.resolve_voice(voice)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    await validate_ranking_vision(ai_provider)
     sources = []
     try:
         for idx, upload in enumerate(video_files):
@@ -216,6 +339,7 @@ async def create_ranking_upload(topic: str = Form(...), count: int = Form(5),
             "topic": parsed, "count": count, "source_files": sources,
             "ai_provider": ai_provider, "narration": narration, "layout": layout,
             "segment_duration": segment_duration,
+            **voice_settings,
             "source_titles": [Path(v.filename or "Highlight").stem for v in video_files]})
     except Exception:
         import shutil
@@ -232,13 +356,17 @@ def api_list_projects(
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
 ):
-    return list_projects(mode=mode, search=search, status=status)
+    projects = list_projects(mode=mode, search=search, status=status)
+    for project in projects:
+        project['clips'] = [c for c in project['clips'] if clip_passed_production_qc(c)]
+    return projects
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
 def api_get_project(project_id: str):
     p = get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+    p['clips'] = [c for c in p['clips'] if clip_passed_production_qc(c)]
     return p
 
 @router.get("/projects/{project_id}/result")
@@ -246,17 +374,27 @@ def api_get_project_result(project_id: str):
     p = get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
-    return {"clips": p.get("clips", []), "status": p.get("status")}
+    return {"clips": [c for c in p.get('clips',[]) if clip_passed_production_qc(c)], "status": p.get("status")}
 
 @router.post("/projects/{project_id}/regenerate")
 async def api_regenerate_project(project_id: str):
+    from app.core.database import update_project, get_connection
     p = get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+    if p['mode']=='discovery':
+        from app.studio import store
+        previous=store.task(p['input_data'].get('studio_task_id',''))
+        if not previous or previous['status'] not in ('FAILED','CANCELLED'):
+            raise HTTPException(409,'Create another version from Viral Discovery; active or published productions cannot be replaced.')
+        store.update(previous['id'],status='CREATED',error=None,lease_owner=None,lease_until=None)
+        with get_connection() as conn:
+            conn.execute('UPDATE studio_tasks SET attempts=0 WHERE id=?',(previous['id'],))
+        update_project(project_id,status='CREATED')
+        return {'project_id':project_id,'job_id':previous['id'],'status':'QUEUED'}
 
     if p.get("status") in {"PROCESSING", "CREATED"}:
         raise HTTPException(409, "This project already has an active job.")
-    from app.core.database import update_project
     update_project(project_id, status="CREATED", result_data={})
     new_job_id = f"job_regen_{uuid.uuid4().hex[:8]}"
     create_job(job_id=new_job_id, project_id=project_id)
@@ -268,6 +406,16 @@ async def api_delete_project(project_id: str):
     p = get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+    if p['mode']=='discovery':
+        from app.studio.worker import cancel_task
+        from app.studio import store
+        for task in store.tasks():
+            if task['project_id']==project_id:
+                try: await cancel_task(task['id'])
+                except ValueError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+        from app.core.database import get_connection
+        with get_connection() as c:
+            c.execute('DELETE FROM studio_tasks WHERE project_id=?',(project_id,))
     if p.get("job") and p["job"]["id"] in job_engine.active_tasks:
         await job_engine.cancel_job(p["job"]["id"])
     import shutil
@@ -291,6 +439,12 @@ async def api_cancel_job(job_id: str):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    from app.studio import store
+    if store.task(job_id):
+        from app.studio.worker import cancel_task
+        try: await cancel_task(job_id)
+        except ValueError as exc: raise HTTPException(status_code=409,detail=str(exc)) from exc
+        return {'status':'CANCELLED'}
     cancelled = await job_engine.cancel_job(job_id)
     return {"status": "CANCELLED" if cancelled else job["status"]}
 
@@ -341,12 +495,14 @@ def api_download_clip(clip_id: str):
     c = get_clip(clip_id)
     if not c or not c.get("video_path"):
         raise HTTPException(status_code=404, detail="Clip not found")
+    if not clip_passed_production_qc(c):
+        raise HTTPException(409, 'This export predates production QC or did not pass it. Regenerate before downloading or publishing.')
 
     raw_path = c["video_path"].lstrip("/")
     # e.g., output/ranking/clip.mp4 or output/viral/clip.mp4
-    from app.core.config import STORAGE_DIR
-    actual_file = STORAGE_DIR / raw_path
-    if not actual_file.exists():
+    from app.core.config import STORAGE_DIR, OUTPUT_STORAGE_DIR
+    actual_file = (STORAGE_DIR / raw_path).resolve()
+    if not actual_file.is_relative_to(OUTPUT_STORAGE_DIR.resolve()) or not actual_file.is_file() or actual_file.suffix.lower()!='.mp4':
         raise HTTPException(status_code=404, detail="Video file on disk not found")
 
     safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in c["title"])

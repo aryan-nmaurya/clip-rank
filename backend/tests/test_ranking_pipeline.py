@@ -13,22 +13,23 @@ def test_best_moment_is_number_one():
     assert result[-1]["id"] == "best"
 
 
-def test_ranking(isolated_app, footage, monkeypatch):
-    from app.ai.router import AIRouter
-    async def no_ai(*args, **kwargs): return None, "fallback"
-    monkeypatch.setattr(AIRouter, "get_active_provider", no_ai)
+def test_ranking(isolated_app, footage, ranking_vision):
     create_project("ranking_test", "ranking", "Test countdown", {"count": 3})
     create_job("ranking_job", "ranking_test")
     asyncio.run(RankingPipeline.run("ranking_job", "ranking_test", "Test moments", 3,
                 {"ai_provider": "auto", "source_files": [str(p) for p in footage], "segment_duration": 3}, lambda *a: None))
     project = get_project("ranking_test")
     assert project["status"] == "COMPLETED"
-    assert len(project["clips"]) == 1
+    assert len(project["clips"]) == 2
+    assert project['result_data']['production_qc_passed'] is True
+    assert project['result_data']['variants'][0]['hook'] != project['result_data']['variants'][1]['hook']
     assert [m["assigned_rank"] for m in project["result_data"]["moments"]] == [3, 2, 1]
-    assert project["result_data"]["warnings"]
+    assert project["result_data"]["topic_verified"] is True
+    assert all(m['label']=='Moving color pattern' and m['final_review']['passed'] for m in project['result_data']['moments'])
     clip = project["clips"][0]
     path = isolated_app["ranking"] / (clip["id"] + ".mp4")
-    info = FFmpegCore.validate_output(path, 9)
+    info = FFmpegCore.validate_output(path, clip['duration'])
+    assert (info['width'],info['height'],info['sample_rate']) == (1080,1920,48000)
     assert info["has_audio"]
     preview = isolated_app["ranking"] / (clip["id"] + "_preview.jpg")
     with Image.open(preview) as frame:

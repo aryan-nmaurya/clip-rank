@@ -9,6 +9,13 @@ numpy>=1.26.0
 aiofiles>=23.2.1
 sse-starlette>=2.0.0
 python-multipart>=0.0.9
-yt-dlp>=2026.8.19
+yt-dlp[curl-cffi]>=2026.8.19
 faster-whisper>=1.2.1
 av>=15,<17
+edge-tts>=7.2.3,<8
+cryptography>=43
+keyring>=25
+pocket-tts==3.3.0
+soundfile>=0.13
+PyYAML>=6.0
+num2words>=0.5.14,<1

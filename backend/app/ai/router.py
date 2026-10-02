@@ -9,11 +9,21 @@ from app.ai.local_provider import LocalProvider
 logger = logging.getLogger("ai_shorts.ai_router")
 
 class AIRouter:
+    @classmethod
+    async def require_ranking_provider(cls, settings):
+        try:
+            provider, name = await cls.get_active_provider(settings)
+        except ValueError as exc:
+            raise ValueError("The selected ranking vision engine is not connected. Configure your Gemini key or installed Ollama vision model in Settings.") from exc
+        if not provider:
+            raise ValueError("Ranking needs a connected vision model to verify your topic, action and clip labels. Add a Gemini API key or connect an installed Ollama vision model in Settings. Motion scores cannot verify a topic.")
+        return provider, name
+
     @staticmethod
     def get_providers(settings: Dict[str, Any]):
         gemini = GeminiProvider(
             api_key=settings.get("gemini_api_key"),
-            model=settings.get("gemini_model", "gemini-2.5-flash")
+            model=settings.get("gemini_model", "gemini-3.1-flash-lite")
         )
         openai = OpenAIProvider(
             api_key=settings.get("openai_api_key"),
@@ -21,7 +31,7 @@ class AIRouter:
         )
         local = LocalProvider(
             endpoint=settings.get("local_endpoint", "http://localhost:11434"),
-            model=settings.get("local_model", "qwen2.5:latest")
+            model=settings.get("local_model", "qwen3-vl:4b")
         )
         return gemini, openai, local
 
@@ -36,14 +46,14 @@ class AIRouter:
                 return selected, preferred
             raise ValueError(f"{preferred.title()} is unavailable. Configure it in Settings or choose Auto for local visual analysis.")
 
-        # Auto mode:
-        # Check cloud first for high quality multimodal/creative tasks if configured, else local
+        # Automatic mode spends local compute first. Cloud is a bounded fallback
+        # in the studio, and a connection fallback for the manual production modes.
+        if await local.is_available():
+            return local, "local"
         if await gemini.is_available():
             return gemini, "gemini"
         if await openai.is_available():
             return openai, "openai"
-        if await local.is_available():
-            return local, "local"
 
         return None, "fallback"
 
@@ -59,7 +69,7 @@ class AIRouter:
         if preferred == "gemini":
             status_text = "● AI Ready · Google AI Studio" if gemini_ok else "● Google AI Studio (Key required in Settings)"
             is_ready = gemini_ok
-            active_model = settings.get("gemini_model", "gemini-2.5-flash")
+            active_model = settings.get("gemini_model", "gemini-3.1-flash-lite")
         elif preferred == "openai":
             status_text = "● AI Ready · OpenAI" if openai_ok else "● OpenAI (Key required in Settings)"
             is_ready = openai_ok
@@ -67,24 +77,24 @@ class AIRouter:
         elif preferred == "local":
             status_text = "● AI Ready · Local (Ollama)" if local_ok else "● Local AI unavailable"
             is_ready = local_ok
-            active_model = settings.get("local_model", "qwen2.5:latest")
+            active_model = settings.get("local_model", "qwen3-vl:4b")
         else: # auto
-            if gemini_ok:
+            if local_ok:
+                status_text = "● AI Ready · Local (Ollama)"
+                is_ready = True
+                active_model = settings.get("local_model", "qwen3-vl:4b")
+            elif gemini_ok:
                 status_text = "● AI Ready · Google AI Studio"
                 is_ready = True
-                active_model = settings.get("gemini_model", "gemini-2.5-flash")
+                active_model = settings.get("gemini_model", "gemini-3.1-flash-lite")
             elif openai_ok:
                 status_text = "● AI Ready · OpenAI"
                 is_ready = True
                 active_model = settings.get("openai_model", "gpt-4o-mini")
-            elif local_ok:
-                status_text = "● AI Ready · Local (Ollama)"
-                is_ready = True
-                active_model = settings.get("local_model", "qwen2.5:latest")
             else:
-                status_text = "● Visual analysis · No AI model configured"
-                is_ready = True
-                active_model = "Measured motion and clarity"
+                status_text = "● Connect vision for production QC"
+                is_ready = False
+                active_model = "No production vision model"
 
         return {
             "status_text": status_text,
@@ -94,11 +104,44 @@ class AIRouter:
             "gemini_configured": gemini_ok,
             "openai_configured": openai_ok,
             "active_model": active_model,
+            "ranking_ready": (gemini_ok or openai_ok or local_ok) if preferred == "auto" else is_ready,
         }
 
     @classmethod
-    async def evaluate_moments(cls, moments, image_path, settings, transcript=None, topic=None):
+    async def screen_ranking_source(cls, image_path, metadata, settings, provider_info=None, required=False):
+        provider, name = provider_info or await cls.get_active_provider(settings)
+        if not provider:
+            return None
+        prompt = (
+            "Inspect ALL source frames in this contact sheet. We need an individual raw event clip, "
+            "never footage taken from an existing ranking/countdown/Top N/tier list or multi-event compilation. "
+            "Reject large existing meme/editorial overlays that obscure action or make unsupported injury/death claims. "
+            "A small creator watermark or necessary sports scoreboard alone is allowed and must remain. "
+            "Look for embedded numbered lists, changing rank badges, countdown narration text, ranking headings, "
+            "or a montage of unrelated clips. Subtitles, creator watermarks, and sports scoreboards alone are allowed. "
+            "If uncertain, set suitable_raw=false. Use only visible evidence. Return only JSON with actual booleans: "
+            '{"suitable_raw": true, "already_ranked": false, "compilation": false, "reason": "Observed evidence"}. '
+            + json.dumps({"source_title": metadata.get("title")})
+        )
+        raw = await provider.analyze_images([image_path], prompt)
+        try:
+            clean = (raw or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            result = json.loads(clean)
+            if all(type(result.get(key)) is bool for key in ("suitable_raw", "already_ranked", "compilation")):
+                return {**result, "method": f"{name} source verification"}
+        except (ValueError, TypeError, AttributeError):
+            pass
+        if required or settings.get("ai_provider", "auto") != "auto":
+            raise ValueError(f"{name.title()} could not verify that the source is an individual raw clip. Check the vision model and retry.")
+        return None
+
+    @classmethod
+    async def evaluate_moments(cls, moments, image_path, settings, transcript=None, topic=None, provider_info=None):
         """AI sees sampled source frames and real timed speech, never an invented context."""
+        if topic:
+            from app.ai.ranking_verifier import RankingVerifier
+            provider, name = provider_info or await cls.require_ranking_provider(settings)
+            return await RankingVerifier.evaluate(provider, name, moments, image_path, topic), f"{name} verified topic and action"
         provider, name = await cls.get_active_provider(settings)
         if not provider:
             return moments, "visual metrics"
@@ -114,8 +157,9 @@ class AIRouter:
             "Use only visible actions and supplied real speech. Do not claim viral popularity, invent dialogue or events. "
             "Flag already_ranked=true for footage that already contains a ranking list or countdown. Score retention potential (0-100), clarity and payoff, and give a short factual 2-5 word label and a specific reason. "
             "These scores are estimates, not predictions of views. Keep the provided time ranges. "
+            "Also give commentary: one conversational sentence of at most 12 words describing the visible action, without a rank number. "
             + (f"Ranking topic: {topic}. Also give topic_relevance (0-1). " if topic else "Select standalone highlights. ")
-            + "Return only JSON: {\"moments\": [{\"id\": 0, \"score\": 75, \"label\": \"Short factual label\", \"reason\": \"Observed reason\", \"topic_relevance\": 0.9}]}\n"
+            + "Return only JSON: {\"moments\": [{\"id\": 0, \"score\": 75, \"label\": \"Short factual label\", \"commentary\": \"A short description of the observed action\", \"reason\": \"Observed reason\", \"already_ranked\": false, \"topic_relevance\": 0.9}]}\n"
             + json.dumps(evidence, ensure_ascii=False)[:16000]
         )
         raw = await provider.analyze_images([image_path], prompt)
@@ -139,8 +183,9 @@ class AIRouter:
                 revised.append({**moments[idx], "score": max(0, min(100, round(score))),
                                 "label": str(item.get("label") or moments[idx]["title"])[:80],
                                 "reason": str(item.get("reason") or moments[idx]["reason"])[:600],
+                                "commentary": " ".join(str(item.get("commentary") or "").split()[:12]),
                                 "topic_relevance": max(0, min(1, float(item.get("topic_relevance", 1)))),
-                                "already_ranked": bool(item.get("already_ranked", False)),
+                                "already_ranked": item.get("already_ranked", False) is not False,
                                 "analysis_basis": f"{name} frame analysis"})
             if revised:
                 revised.extend(m for i, m in enumerate(moments) if i not in seen)

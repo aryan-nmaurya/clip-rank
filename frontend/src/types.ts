@@ -1,11 +1,13 @@
-export type ProjectMode = 'viral' | 'ranking';
+export type ProjectMode = 'viral' | 'ranking' | 'discovery';
 export type AIProviderType = 'auto' | 'gemini' | 'openai' | 'local';
 
 export interface Settings {
   ai_provider: AIProviderType;
   gemini_api_key?: string;
+  gemini_api_key_configured?: boolean;
   gemini_model: string;
   openai_api_key?: string;
+  openai_api_key_configured?: boolean;
   openai_model: string;
   local_endpoint: string;
   local_model: string;
@@ -19,6 +21,7 @@ export interface AIStatus {
   status_text: string;
   provider: AIProviderType;
   is_ready: boolean;
+  ranking_ready: boolean;
   local_available: boolean;
   gemini_configured: boolean;
   openai_configured: boolean;
@@ -53,6 +56,25 @@ export interface OutputClip {
   preview_path?: string;
   video_path?: string;
   created_at?: string;
+}
+
+export interface YouTubeConnection {
+  configured: boolean;
+  connected: boolean;
+  channel_title?: string;
+  channel_id?: string;
+  default_privacy: 'private' | 'unlisted' | 'public';
+  default_made_for_kids: boolean;
+}
+
+export interface YouTubeUpload {
+  clip_id: string;
+  status: 'QUEUED' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
+  progress: number;
+  metadata: { title: string; description: string; privacy: string; made_for_kids: boolean };
+  error?: string;
+  url?: string;
+  actual_privacy?: string;
 }
 
 export interface Job {

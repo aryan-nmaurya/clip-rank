@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Eye, EyeOff, Save, Sparkles, HardDrive, KeyRound, Cpu } from 'lucide-react';
 import { Settings, AIProviderType } from '../types';
-import { getSettings, updateSettings } from '../api';
+import { getSettings, updateSettings, getVisionConnections, testVisionConnection } from '../api';
+import { VoicePicker } from '../components/VoicePicker';
+import { YouTubeSettings } from '../components/YouTubeSettings';
 
 export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSettingsUpdated }) => {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -10,9 +12,13 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
   const [savedToast, setSavedToast] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [connections, setConnections] = useState<any>(null);
+  const [testingVision, setTestingVision] = useState<'gemini' | 'local' | null>(null);
+  const [visionTests, setVisionTests] = useState<Record<string, { passed: boolean; message: string }>>({});
 
   useEffect(() => {
     getSettings().then(setSettings).catch(() => {});
+    getVisionConnections().then(setConnections).catch(() => {});
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -23,6 +29,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
     try {
       const updated = await updateSettings(settings);
       setSettings(updated);
+      getVisionConnections().then(setConnections).catch(() => {});
       onSettingsUpdated();
       setSavedToast(true);
       setTimeout(() => setSavedToast(false), 3000);
@@ -31,6 +38,17 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
     } finally {
       setSaving(false);
     }
+  };
+
+  const testVision = async (provider: 'gemini' | 'local') => {
+    if (!settings) return;
+    setTestingVision(provider);
+    try {
+      const result = await testVisionConnection(provider, settings);
+      setVisionTests(current => ({ ...current, [provider]: result }));
+    } catch (err: any) {
+      setVisionTests(current => ({ ...current, [provider]: { passed: false, message: err.message } }));
+    } finally { setTestingVision(null); }
   };
 
   if (!settings) {
@@ -93,7 +111,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-semibold text-zinc-900">Auto (Hybrid Router)</span>
                 <span className="text-[11px] text-zinc-500 leading-relaxed">
-                  Uses a configured AI model to inspect frames. Without a model, estimates potential from measured motion and clarity.
+                  Uses a connected vision model. Both workflows require complete-story verification and final rendered video QC.
                 </span>
               </div>
               <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider">
@@ -113,7 +131,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-semibold text-zinc-900">Google AI Studio</span>
                 <span className="text-[11px] text-zinc-500 leading-relaxed">
-                  Fast multimodal reasoning using Google Gemini 2.5 Flash API key.
+                  Add your Gemini key to verify subjects, actions, outcomes and clip labels.
                 </span>
               </div>
               <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
@@ -153,7 +171,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-semibold text-zinc-900">Local AI only</span>
                 <span className="text-[11px] text-zinc-500 leading-relaxed">
-                  On-device frame analysis through Ollama. Configure an installed vision-capable model.
+                  Connect a local or remote Ollama endpoint and an installed vision model. Model installation is managed separately.
                 </span>
               </div>
               <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
@@ -172,8 +190,8 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               <input
                 type={showGeminiKey ? 'text' : 'password'}
                 value={settings.gemini_api_key || ''}
+                placeholder={settings.gemini_api_key_configured?'Key saved securely on backend; enter to replace':'Enter Gemini API key'}
                 onChange={(e) => setSettings({ ...settings, gemini_api_key: e.target.value })}
-                placeholder="AIzaSy..."
                 className="w-full h-10 px-3 pr-10 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400"
               />
               <button
@@ -196,8 +214,8 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               <input
                 type={showOpenAIKey ? 'text' : 'password'}
                 value={settings.openai_api_key || ''}
+                placeholder={settings.openai_api_key_configured?'Key saved on backend; enter to replace':'Enter OpenAI API key'}
                 onChange={(e) => setSettings({ ...settings, openai_api_key: e.target.value })}
-                placeholder="sk-..."
                 className="w-full h-10 px-3 pr-10 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400"
               />
               <button
@@ -212,21 +230,17 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
 
           <div className="grid grid-cols-2 gap-4">
             <label className="text-xs text-zinc-600">OpenAI model<input value={settings.openai_model} onChange={e => setSettings({ ...settings, openai_model: e.target.value })} className="creator-select mt-2" /></label>
-            <label className="text-xs text-zinc-600">Ollama vision model<input value={settings.local_model} onChange={e => setSettings({ ...settings, local_model: e.target.value })} placeholder="An installed image-capable model" className="creator-select mt-2" /></label>
+            <label className="text-xs text-zinc-600">Ollama vision model<input value={settings.local_model} onChange={e => setSettings({ ...settings, local_model: e.target.value })} placeholder="qwen3-vl:4b or your installed vision model" className="creator-select mt-2" /></label>
           </div>
           {/* Model Selections */}
           <div className="grid grid-cols-2 gap-4 pt-1">
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-zinc-700">Gemini Model</label>
-              <select
+              <input
                 value={settings.gemini_model}
                 onChange={(e) => setSettings({ ...settings, gemini_model: e.target.value })}
                 className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-800 focus:outline-none"
-              >
-                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-              </select>
+                placeholder="Your image-capable Gemini model" />
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -240,8 +254,20 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
               />
             </div>
           </div>
+          <div className="border-t border-zinc-100 pt-4 space-y-3">
+            <p className="text-xs font-semibold">Vision connections</p>
+            <p className="text-xs text-zinc-500">Enter your connection details, test image reading, then save. The app does not install or download local models.</p>
+            <div className="grid md:grid-cols-2 gap-3">{(['gemini', 'local'] as const).map(provider => <div key={provider} className="border border-zinc-200 rounded-xl p-4 space-y-2">
+              <p className="text-xs font-semibold">{provider === 'gemini' ? 'Gemini vision' : 'Ollama vision'}</p>
+              <p className="text-xs text-zinc-500">{connections?.[provider]?.message || 'Ready for connection details.'}</p>
+              {provider === 'local' && connections?.local?.installed_models?.length > 0 && <p className="text-[11px] text-zinc-500">Installed: {connections.local.installed_models.join(', ')}</p>}
+              <button type="button" disabled={!!testingVision} onClick={() => testVision(provider)} className="text-xs font-semibold underline disabled:opacity-50">{testingVision === provider ? 'Testing image reading…' : 'Test vision connection'}</button>
+              {visionTests[provider] && <p role="status" className={`text-xs ${visionTests[provider].passed ? 'text-emerald-700' : 'text-red-600'}`}>{visionTests[provider].message}</p>}
+            </div>)}</div>
+          </div>
         </div>
 
+        <YouTubeSettings />
         {/* Section 2: General & Media Options */}
         <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-sm p-6 flex flex-col gap-5">
           <div className="flex items-center gap-2.5 pb-2 border-b border-zinc-100">
@@ -251,17 +277,8 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-zinc-700">Default Narration Voice</label>
-              <select
-                value={settings.default_voice}
-                onChange={(e) => setSettings({ ...settings, default_voice: e.target.value })}
-                className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-800 focus:outline-none"
-              >
-                <option value="Samantha">Samantha (Clear & Natural)</option>
-                <option value="Daniel">Daniel (British Storyteller)</option>
-                <option value="Alex">Alex (US Classic)</option>
-                <option value="Ava">Ava (Expressive)</option>
-              </select>
+              <VoicePicker voice={settings.default_voice} onChange={voice => setSettings({ ...settings, default_voice: voice })} />
+              <p className="text-[11px] text-zinc-400">{settings.default_voice.startsWith('pocket:')?'Pocket TTS runs locally on your Mac. No speech API key or internet is needed after setup.':'Online neural speech requires internet. No speech API key needed.'}</p>
             </div>
 
             <div className="flex flex-col gap-1.5">

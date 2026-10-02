@@ -34,7 +34,7 @@ def test_timed_captions_use_speech(tmp_path):
     segments = [{"start": 2, "end": 3, "text": "A real moment", "words": [
         {"start": 2, "end": 2.3, "word": "A"}, {"start": 2.3, "end": 2.6, "word": "real"}, {"start": 2.6, "end": 3, "word": "moment"}]}]
     path = CaptionRenderer.write_ass(tmp_path / "captions.ass", segments, 2, 4)
-    assert "0:00:00.00,0:00:00.30" in path.read_text()
+    assert "0:00:00.00,0:00:01.00" in path.read_text()
     assert "REAL" in path.read_text()
     assert CaptionRenderer.write_ass(tmp_path / "empty.ass", [], 0, 3) is None
 
@@ -55,8 +55,8 @@ def test_media_work_does_not_block_loop_and_can_cancel():
 
 
 def test_caption_track_renders_without_libass(tmp_path, footage):
-    segments = [{"start": 0, "end": 1, "text": "Real timed captions", "words": [
-        {"start": 0, "end": .3, "word": "Real"}, {"start": .3, "end": .6, "word": "timed"}, {"start": .6, "end": 1, "word": "captions"}]}]
+    segments = [{"start": 0, "end": 1, "text": "Real timed landing", "words": [
+        {"start": 0, "end": .3, "word": "Real"}, {"start": .3, "end": .6, "word": "timed"}, {"start": .6, "end": 1, "word": "landing"}]}]
     captions = CaptionRenderer.write_ass(tmp_path / "speech.ass", segments, 0, 2)
     out = VideoReframer.reframe_to_vertical(footage[0], tmp_path / "captioned.mp4", duration=2, captions_ass=captions)
     FFmpegCore.validate_output(out, 2)
@@ -65,7 +65,7 @@ def test_caption_track_renders_without_libass(tmp_path, footage):
     FFmpegCore.extract_frame(out, image, .4)
     from PIL import Image
     with Image.open(image) as frame:
-        pixels = np.array(frame)[990:1050, 80:640]
+        pixels = np.array(frame)[1460:1600, 85:930]
         # The active word must contain real yellow pixels above the dark outline.
         yellow = (pixels[:, :, 0] > 200) & (pixels[:, :, 1] > 180) & (pixels[:, :, 2] < 100)
         assert yellow.sum() > 100

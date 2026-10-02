@@ -20,11 +20,7 @@ def test_transcription_failure_never_invents_speech(monkeypatch, tmp_path):
     assert result["available"] is False
 
 
-def test_viral(isolated_app, footage, monkeypatch):
-    from app.ai.router import AIRouter
-    async def no_ai(*args, **kwargs): return None, "fallback"
-    monkeypatch.setattr(AIRouter, "get_active_provider", no_ai)
-    monkeypatch.setattr(Transcriber, "transcribe", lambda _: {"segments": [], "text": "", "available": True})
+def test_viral(isolated_app, footage, ranking_vision):
     create_project("viral_test", "viral", "Real footage", {"count": 3})
     create_job("viral_job", "viral_test")
     asyncio.run(ViralPipeline.run("viral_job", "viral_test", str(footage[0]), 3,
@@ -35,6 +31,8 @@ def test_viral(isolated_app, footage, monkeypatch):
     assert 5.9 <= project["clips"][0]["duration"] <= 6.2
     assert project["result_data"]["generated_count"] == 1
     assert project["result_data"]["warnings"]
+    assert project['result_data']['production_qc_passed'] is True
+    assert project['result_data']['moments'][0]['final_review']['passed'] is True
 
 
 def test_missing_source_fails_without_placeholder(isolated_app):

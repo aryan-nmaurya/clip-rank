@@ -33,7 +33,7 @@ async def run_blocking(fn, *args, **kwargs):
         _cancel_event.reset(token)
 
 
-def run_process(cmd, timeout=600):
+def run_process(cmd, timeout=600, include_stderr=False):
     check_cancelled()
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     started = time.monotonic()
@@ -49,7 +49,7 @@ def run_process(cmd, timeout=600):
                 continue
         if process.returncode:
             raise RuntimeError(stderr.decode(errors="replace")[-2400:] or "Media operation failed")
-        return stdout
+        return stdout + stderr if include_stderr else stdout
     except BaseException:
         process.terminate()
         try:

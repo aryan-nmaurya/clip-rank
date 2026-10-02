@@ -19,6 +19,6 @@ fi
 # Always rebuild so code changes cannot silently leave a stale interface.
 npm --prefix frontend run build
 
-echo "AI Shorts Creator is available at http://localhost:8000"
+echo "ClipRank is available at http://localhost:8000"
 export PYTHONPATH="$SCRIPT_DIR/backend"
 exec .venv/bin/python backend/run.py

@@ -1,6 +1,35 @@
-import { Project, Job, Settings, AIStatus, Diagnostics } from './types';
+import { Project, Job, Settings, AIStatus, Diagnostics, YouTubeConnection, YouTubeUpload } from './types';
 
 const API_BASE = '/api';
+
+export async function studioRequest(path:string,payload?:unknown):Promise<any> {
+  const response=await fetch(`${API_BASE}/studio${path}`,payload===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data=await response.json();
+  if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Check your studio settings and try again.');
+  return data;
+}
+
+async function youtubeRequest(path: string, payload?: unknown) {
+  const res = await fetch(`${API_BASE}/youtube${path}`, payload === undefined ? undefined : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : 'Could not complete this YouTube action.');
+  }
+  return res.json();
+}
+
+export const getYouTubeConnection = (): Promise<YouTubeConnection> => youtubeRequest('/connection');
+export const configureYouTube = (payload: { client_document?: unknown; privacy: string; made_for_kids: boolean }): Promise<YouTubeConnection> => youtubeRequest('/configure', payload);
+export const connectYouTube = (): Promise<{ authorization_url: string }> => youtubeRequest('/connect', {});
+export const disconnectYouTube = (): Promise<YouTubeConnection> => youtubeRequest('/disconnect', {});
+export const getYouTubeUpload = (clipId: string): Promise<YouTubeUpload | null> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}`);
+export const getCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}`);
+export const refreshCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/check`,{});
+export const confirmCopyrightCheck = (clipId:string,verdict:string,note:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/review`,{verdict,note});
+export const publishCopyrightCleared = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/publish`,{});
+export const uploadToYouTube = (clipId: string, payload: { title: string; description: string; privacy: string; made_for_kids: boolean }): Promise<YouTubeUpload> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}`, payload);
 
 export async function createViralProject(formData: FormData): Promise<{ project_id: string; job_id: string }> {
   const res = await fetch(`${API_BASE}/projects/viral`, {
@@ -23,6 +52,7 @@ export async function createRankingProject(params: {
   layout?: 'fill' | 'fit';
   segment_duration?: number;
   voice?: string;
+  source_platforms?: string[];
 }): Promise<{ project_id: string; job_id: string }> {
   const res = await fetch(`${API_BASE}/projects/ranking`, {
     method: 'POST',
@@ -42,6 +72,37 @@ export async function createRankingUpload(data: FormData): Promise<{ project_id:
     const error = await response.json().catch(() => ({}));
     throw new Error(typeof error.detail === 'string' ? error.detail : 'Failed to upload ranking sources');
   }
+  return response.json();
+}
+
+export async function getVoicePreview(voice: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/speech/preview/${encodeURIComponent(voice)}`);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Could not preview this voice.');
+  }
+  return response.blob();
+}
+
+export async function getSpeechStatus(): Promise<any> {
+  const response = await fetch(`${API_BASE}/speech/status`);
+  if (!response.ok) throw new Error('Could not check the local voice engine.');
+  return response.json();
+}
+
+export async function getVisionConnections(): Promise<any> {
+  const response = await fetch(`${API_BASE}/vision/connections`);
+  if (!response.ok) throw new Error('Could not check vision connections.');
+  return response.json();
+}
+
+export async function testVisionConnection(provider: 'gemini' | 'local', settings: Settings): Promise<{ passed: boolean; message: string }> {
+  const response = await fetch(`${API_BASE}/vision/test`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, gemini_api_key: settings.gemini_api_key, gemini_model: settings.gemini_model,
+      local_endpoint: settings.local_endpoint, local_model: settings.local_model }),
+  });
+  if (!response.ok) throw new Error('Could not test vision. Check your connection settings.');
   return response.json();
 }
 
