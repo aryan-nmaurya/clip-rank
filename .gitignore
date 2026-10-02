@@ -1,0 +1,45 @@
+# Generated videos, downloads, previews, model weights, and local job data
+/storage/
+/backend/data/
+
+# Large video and audio assets
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[mM][kK][vV]
+*.[wW][eE][bB][mM]
+*.[aA][vV][iI]
+*.[mM]4[vV]
+*.[mM][pP][gG]
+*.[mM][pP][eE][gG]
+*.[wW][aA][vV]
+*.[mM][pP]3
+*.[mM]4[aA]
+*.[aA][aA][cC]
+*.[fF][lL][aA][cC]
+*.[oO][gG][gG]
+
+# Dependencies, build output, and caches
+.venv/
+venv/
+node_modules/
+/frontend/dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.tsbuildinfo
+
+# Local databases, logs, secrets, and OS metadata
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.ses
+*.log
+.env
+.env.*
+!.env.example
+!.env.*.example
+.DS_Store
