@@ -30,6 +30,8 @@ def produce(payload:ProduceRequest):
     item=store.opportunity(payload.opportunity_id)
     if not item: raise HTTPException(404,'Opportunity not found.')
     if item.get('moment') and not ContentDirector.eligible(item): raise HTTPException(400,'The moment does not meet the configured rights policy.')
+    if item.get('moment') and not ContentDirector.qualified(item):
+        raise HTTPException(400,'This moment is below the production quality threshold. Choose a stronger verified opportunity.')
     task=store.enqueue(payload.opportunity_id,payload.format)
     return {'project_id':task['project_id'],'job_id':task['id']}
 

@@ -9,7 +9,7 @@ from app.media.captions import font
 
 class MomentAnalyzer:
     @staticmethod
-    def analyze(video: Path, count=3, target_duration=25.0, segments=None, title="Source video", coverage=False):
+    def analyze(video: Path, count=3, target_duration=25.0, segments=None, title="Source video", coverage=False, minimum_duration=6.):
         info = FFmpegCore.get_video_info(video)
         duration = info["duration"]
         if duration < 1:
@@ -25,15 +25,18 @@ class MomentAnalyzer:
         differences[1:] = np.mean(np.abs(frames[1:] - frames[:-1]), axis=(1, 2)) / 255
         contrast = np.std(frames, axis=(1, 2)) / 80
         exposure = np.mean((frames > 12) & (frames < 245), axis=(1, 2))
-        desired = min(target_duration, duration)
+        if duration<minimum_duration:raise ValueError('Source is too short for a complete Short longer than 10 seconds.')
+        desired = min(max(target_duration,minimum_duration), duration)
         # Return fewer clips when the source cannot support distinct complete moments.
-        desired = min(desired, max(6, duration / min(count, max(1, int(duration // 6)))))
+        if not coverage:
+            desired = min(desired, max(minimum_duration, duration / min(count, max(1, int(duration // minimum_duration)))))
         step = max(1, desired / 4)
         starts = list(np.arange(0, max(0, duration - desired) + .01, step))
         starts.append(max(0, duration - desired))
         candidates = []
         for start in sorted(set(starts)):
             end = min(duration, start + desired)
+            original_start,original_end=start,end
             # Start/end on real sentence boundaries when close to the proposed window.
             if segments:
                 nearest = min(segments, key=lambda s: abs(s["start"] - start))
@@ -44,7 +47,11 @@ class MomentAnalyzer:
                     boundary = min(near_end, key=lambda t: abs(t - end))
                     if abs(boundary - end) < 4:
                         end = min(duration, boundary)
+                # Speech boundaries cannot shrink a complete visual story below
+                # the required output length; keep its real context/aftermath.
+                if end-start<minimum_duration:start,end=original_start,original_end
             lo = min(len(frames) - 1, int(start * fps))
+            if end-start<minimum_duration:continue
             hi = max(lo + 1, min(len(frames), int(end * fps)))
             measured = differences[lo:hi]
             # A hard scene cut is not subject movement; avoid inflating static meme scores.
@@ -63,7 +70,7 @@ class MomentAnalyzer:
             return [candidates[i] for i in sorted(set(indices))]
         selected = []
         for item in sorted(candidates, key=lambda x: x["score"], reverse=True):
-            if any(max(0, min(item["end"], s["end"]) - max(item["start"], s["start"])) > .25 * min(item["end"]-item["start"], s["end"]-s["start"]) for s in selected):
+            if any(min(item['end'],s['end'])-max(item['start'],s['start'])>.05 for s in selected):
                 continue
             selected.append(item)
             if len(selected) == count:
@@ -75,12 +82,13 @@ class MomentAnalyzer:
         output.parent.mkdir(parents=True, exist_ok=True)
         fractions = (.01, .1, .2, .3, .4, .5, .6, .7, .8, .9, .99) if dense else (.15, .5, .85)
         cell_w, cell_h = (240, 340) if dense else (200, 148)
+        last_frame=max(0,FFmpegCore.get_video_info(video)['duration']-.1)
         sheet = Image.new("RGB", (cell_w * len(fractions), len(moments) * cell_h), "#18181b")
         draw = ImageDraw.Draw(sheet)
         for i, moment in enumerate(moments):
             draw.text((6, i * cell_h + 4), f"ID {i}  {moment['start']:.1f}–{moment['end']:.1f}s", font=font(14), fill="white")
             for j, fraction in enumerate(fractions):
-                timestamp = moment["start"] + (moment["end"] - moment["start"]) * fraction
+                timestamp = min(last_frame,moment["start"] + (moment["end"] - moment["start"]) * fraction)
                 jpg = output.parent / f"{output.stem}_{i}_{j}.jpg"
                 FFmpegCore.extract_frame(video, jpg, timestamp)
                 with Image.open(jpg) as frame:

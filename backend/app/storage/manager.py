@@ -10,6 +10,7 @@ from app.core.config import (
     OUTPUT_STORAGE_DIR,
     VIRAL_OUTPUT_DIR,
     RANKING_OUTPUT_DIR,
+    MOVIE_OUTPUT_DIR,
     PROJECTS_STORAGE_DIR,
     TEMP_RETENTION_HOURS,
 )
@@ -78,9 +79,9 @@ class StorageManager:
     @staticmethod
     def move_final_clip(source_path: Path, mode: str, clip_id: str, extension: str = ".mp4") -> Path:
         """Moves a rendered short to permanent storage."""
-        if mode not in ('viral','ranking') or not re.fullmatch(r'[A-Za-z0-9_-]{1,220}',clip_id) or extension != '.mp4':
+        if mode not in ('viral','ranking','movie') or not re.fullmatch(r'[A-Za-z0-9_-]{1,220}',clip_id) or extension != '.mp4':
             raise ValueError('Invalid final output identifier.')
-        target_dir = VIRAL_OUTPUT_DIR if mode == "viral" else RANKING_OUTPUT_DIR
+        target_dir = {'viral':VIRAL_OUTPUT_DIR,'ranking':RANKING_OUTPUT_DIR,'movie':MOVIE_OUTPUT_DIR}[mode]
         target_dir.mkdir(parents=True, exist_ok=True)
         dest_path = target_dir / f"{clip_id}{extension}"
         temporary = dest_path.with_suffix('.partial')

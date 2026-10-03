@@ -163,7 +163,8 @@ def test_direct_upload_metadata_progress_duplicate_click(publishing, monkeypatch
     youtube._run_upload('clip')
     payload = post.call_args.kwargs['json']
     assert payload['snippet']['title'] == 'Cat jumps over sofa'
-    assert 'Creator: https://www.youtube.com/watch?v=raw' in payload['snippet']['description']
+    assert payload['snippet']['description'] == '\n'.join(['.']*13)+'\n\nCredits:\nCreator\n\nAbout this Short:\nCat jumps over sofa.\n\nA funny cat.'
+    assert len(payload['snippet']['tags'])==32 and payload['snippet']['tags']==first['metadata']['tags']
     assert payload['status'] == {'privacyStatus': 'private', 'selfDeclaredMadeForKids': False}
     assert first['metadata']['privacy']=='public' and first['metadata']['copyright_gate'] is True
     assert put.call_args_list[0].kwargs['headers']['Content-Range'] == 'bytes 0-7/10'
@@ -278,8 +279,7 @@ def test_credits_follow_the_uploaded_variant(publishing):
     database.update_project('project',result_data={'moments':[{'creator':'A creator','url':'https://example.org/A'}],
         'variants':[{'clip_id':'clip','moments':[{'creator':'B creator','url':'https://example.org/B'}]}]})
     credits=youtube._credits(database.get_clip('clip'))
-    assert 'https://example.org/B' in credits
-    assert 'https://example.org/A' not in credits
+    assert credits == 'B creator'
 
 
 def test_unreviewed_export_cannot_start_upload(publishing):
@@ -287,3 +287,129 @@ def test_unreviewed_export_cannot_start_upload(publishing):
     with pytest.raises(youtube.YouTubeError,match='production QC'):
         youtube.queue_upload('clip',{})
     publishing['executor'].submit.assert_not_called()
+
+
+def test_description_preview_removes_links_and_keeps_creator_voice_and_license_credits(publishing):
+    database.update_project('project',result_data={'sources':[{'creator':'[The Creator](https://example.org/raw)',
+        'license':'CC BY 4.0','url':'https://example.org/raw'}],
+        'voice_provenance':[{'engine':'pocket-tts','voice':'alba'}]})
+    text=youtube.description_preview('clip','Watch this! https://example.org/raw\nwww.example.com\nyoutu.be/raw')['description']
+    assert text.startswith('\n'.join(['.']*13)+'\n\nCredits:\nThe Creator (CC BY 4.0)')
+    assert 'Kyutai Pocket TTS (CC BY 4.0)' in text and 'Alba MacKenna voice, CC BY 4.0' in text
+    assert text.endswith('Watch this!') and 'https:' not in text and 'example.com' not in text and 'youtu.be' not in text
+    assert youtube.description_preview('clip',text)['description']==text
+    from app.api.server import app
+    result=TestClient(app,client=('127.0.0.1',50000)).post('/api/youtube/uploads/clip/preview',json={'description':'Watch this!'})
+    assert result.status_code==200 and result.json()['description']==text
+
+
+def test_copyright_review_api_publishes_cleared_video_without_second_click(publishing,monkeypatch):
+    from app.api.server import app
+    from app.publishing import copyright
+    staged_for_copyright(monkeypatch)
+    put=Mock(return_value=response(body={'id':'video_test','status':{'privacyStatus':'public'}}))
+    monkeypatch.setattr(youtube.requests,'put',put)
+    client=TestClient(app,client=('127.0.0.1',50000))
+    result=client.post('/api/youtube/copyright/clip/review',json={'verdict':'passed','note':'Studio checks completed with no copyright issues.'})
+    assert result.status_code==200 and result.json()['state']=='PUBLISHED'
+    assert youtube.get_upload('clip')['actual_privacy']=='public'
+    assert put.call_args.kwargs['json']['status']['privacyStatus']=='public'
+    copyright.monitor_uploads()
+    assert put.call_count==1
+
+
+def test_background_monitor_does_not_treat_processing_as_copyright_clearance(publishing,monkeypatch):
+    from app.publishing import copyright
+    from app.studio.worker import StudioWorker
+    from app.studio import store
+    get=staged_for_copyright(monkeypatch)
+    store.init_studio()
+    profile=store.profile();profile.enabled=False;store.save_profile(profile)
+    put=Mock();monkeypatch.setattr(youtube.requests,'put',put)
+    StudioWorker().publish_due()
+    assert copyright.read('clip')['state']=='PENDING_REVIEW'
+    put.assert_not_called()
+    get.return_value=response(body={'items':[{'id':'video_test','status':{'uploadStatus':'rejected','rejectionReason':'copyright'}}]})
+    copyright.refresh('clip',force=True)
+    copyright.monitor_uploads()
+    assert copyright.read('clip')['state']=='BLOCKED'
+    put.assert_not_called()
+
+
+def test_automatic_release_retries_connection_failure_without_losing_review(publishing,monkeypatch):
+    from app.publishing import copyright
+    staged_for_copyright(monkeypatch)
+    put=Mock(side_effect=[requests.ConnectionError(),response(body={'status':{'privacyStatus':'public'}})])
+    monkeypatch.setattr(youtube.requests,'put',put)
+    copyright.record_review('clip','passed','Studio copyright checks passed with no issues.')
+    copyright.auto_release('clip')
+    assert copyright.read('clip')['state']=='PASSED' and youtube.get_upload('clip')['actual_privacy']=='private'
+    assert 'retry' in copyright.read('clip')['message']
+    copyright.monitor_uploads();assert put.call_count==1
+    saved=copyright.read('clip');saved['release_attempt_at']=0;copyright.save('clip',saved)
+    copyright.monitor_uploads()
+    assert copyright.read('clip')['state']=='PUBLISHED' and put.call_count==2
+
+
+def test_automatic_release_keeps_api_restricted_video_private(publishing,monkeypatch):
+    from app.publishing import copyright
+    staged_for_copyright(monkeypatch)
+    monkeypatch.setattr(youtube.requests,'put',Mock(return_value=response(body={'status':{'privacyStatus':'private'}})))
+    copyright.record_review('clip','passed','Studio copyright checks passed with no issues.')
+    copyright.auto_release('clip')
+    assert copyright.read('clip')['state']=='PASSED'
+    assert 'kept the video private' in copyright.read('clip')['message']
+    assert youtube.get_upload('clip')['actual_privacy']=='private'
+
+
+def test_automatic_release_respects_daily_studio_schedule(publishing,monkeypatch):
+    from app.publishing import copyright
+    from app.studio import store
+    staged_for_copyright(monkeypatch)
+    store.init_studio()
+    with database.get_connection() as c:
+        c.execute("INSERT INTO studio_tasks (id,opportunity_id,project_id,day,format,clip_id,created_at,updated_at) VALUES ('daily','o','project','2026-10-03','viral_clip','clip','now','now')")
+    put=Mock();monkeypatch.setattr(youtube.requests,'put',put)
+    copyright.record_review('clip','passed','Studio copyright checks passed with no issues.')
+    copyright.auto_release('clip',force=True)
+    copyright.monitor_uploads();put.assert_not_called()
+    assert copyright.read('clip')['state']=='PASSED'
+
+
+def test_existing_private_upload_description_update_keeps_video_metadata_and_visibility(publishing,monkeypatch):
+    staged_for_copyright(monkeypatch)
+    upload=youtube.get_upload('clip')
+    meta={**upload['metadata'],'description':'Original summary\n\nSource credits:\nCreator: https://example.org/raw'}
+    with database.get_connection() as c:
+        c.execute('UPDATE youtube_uploads SET metadata=? WHERE clip_id=?',(json.dumps(meta),'clip'))
+    monkeypatch.setattr(youtube.requests,'get',Mock(return_value=response(body={'items':[{'id':'video_test','snippet':{
+        'channelId':'channel','title':'Existing title','categoryId':'17','tags':['parkour'],'defaultLanguage':'en'}}]})))
+    def sorted_reply(*args,**kwargs):
+        body=json.loads(json.dumps(kwargs['json']))
+        body['snippet']['tags']=sorted(body['snippet']['tags'])
+        return response(body=body)
+    put=Mock(side_effect=sorted_reply)
+    monkeypatch.setattr(youtube.requests,'put',put)
+    result=youtube.update_uploaded_description('clip')
+    assert result['actual_privacy']=='private'
+    assert result['metadata']['tags']==sorted(result['metadata']['tags'])
+    assert result['metadata']['description']=='\n'.join(['.']*13)+'\n\nCredits:\nCreator\n\nAbout this Short:\nCat jumps over sofa.\n\nOriginal summary'
+    snippet=put.call_args.kwargs['json']['snippet']
+    assert snippet['title']=='Existing title' and len(snippet['tags'])==32 and snippet['categoryId']=='17'
+    assert 'parkour' not in snippet['tags']
+    assert 'status' not in put.call_args.kwargs['json']
+    assert put.call_args.kwargs['params']=={'part':'snippet'}
+    youtube.update_uploaded_description('clip');assert put.call_count==1
+
+
+def test_legacy_staged_public_upload_also_releases_after_confirmed_review(publishing,monkeypatch):
+    from app.publishing import copyright
+    staged_for_copyright(monkeypatch)
+    upload=youtube.get_upload('clip');meta=upload['metadata'];meta.pop('auto_release_after_copyright')
+    with database.get_connection() as c:
+        c.execute('UPDATE youtube_uploads SET metadata=? WHERE clip_id=?',(json.dumps(meta),'clip'))
+    put=Mock(return_value=response(body={'status':{'privacyStatus':'public'}}))
+    monkeypatch.setattr(youtube.requests,'put',put)
+    copyright.record_review('clip','passed','Studio copyright checks passed with no issues.')
+    copyright.monitor_uploads()
+    assert copyright.read('clip')['state']=='PUBLISHED' and put.call_count==1

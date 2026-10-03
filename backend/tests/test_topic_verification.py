@@ -72,6 +72,30 @@ def test_label_mismatch_fails_independent_cut_review():
     assert not review['passed']
 
 
+def test_successful_event_is_rejected_before_topic_can_bias_review():
+    class Provider:
+        async def analyze_images(self,images,prompt):
+            assert prompt.startswith('BLIND SOURCE EVENT REVIEW')
+            assert 'Parkour fails' not in prompt and 'Runner fails vault' not in prompt
+            return json.dumps({'observed_action':'The runner deliberately rolls over the rail and lands safely on both feet.',
+                'outcome':'successful','complete_action':True,'confidence':.99,'reason':'Both feet reach the intended landing surface.'})
+    review=asyncio.run(RankingVerifier.review(Provider(),'fixture',
+        {'label':'Runner fails vault','commentary':'The runner falls.'},Path('unused.jpg'),'Parkour fails'))
+    assert not review['passed'] and 'successful' in review['reason']
+
+
+def test_source_video_review_rejects_incomplete_ending():
+    class Provider:
+        async def analyze_video(self,path,prompt):
+            assert prompt.startswith('BLIND SOURCE EVENT REVIEW')
+            return json.dumps({'observed_action':'The runner is still airborne when the footage ends.',
+                'outcome':'uncertain','complete_action':False,'confidence':.99,'reason':'Landing is missing.'})
+        async def analyze_images(self,*args):raise AssertionError('Review must watch the supplied video')
+    review=asyncio.run(RankingVerifier.review(Provider(),'fixture',
+        {'label':'A risky jump','commentary':'Watch his feet.'},Path('unused.jpg'),'Parkour fails',Path('source.mp4')))
+    assert not review['passed']
+
+
 def test_disconnected_ranking_stops_before_downloads(isolated_app,monkeypatch):
     async def no_ai(*args,**kwargs): return None,'fallback'
     monkeypatch.setattr(AIRouter,'get_active_provider',no_ai)
@@ -85,7 +109,7 @@ def test_disconnected_ranking_stops_before_downloads(isolated_app,monkeypatch):
     assert not list(isolated_app['ranking'].glob('*.mp4'))
 
 
-def test_cut_review_failure_cannot_render(isolated_app,footage,ranking_vision,monkeypatch):
+def test_cut_review_failure_cannot_render(isolated_app,ranking_footage,ranking_vision,monkeypatch):
     original=ranking_vision.analyze_images
     async def wrong_label(images,prompt):
         if prompt.startswith('Independently check'):
@@ -96,12 +120,12 @@ def test_cut_review_failure_cannot_render(isolated_app,footage,ranking_vision,mo
     monkeypatch.setattr(ranking_vision,'analyze_images',wrong_label)
     create_project('bad_labels','ranking','Test patterns')
     create_job('bad_labels_job','bad_labels')
-    with pytest.raises(ValueError,match='Only 0 individual clips'):
+    with pytest.raises(ValueError,match='Only 0 unused individual clips'):
         asyncio.run(RankingPipeline.run('bad_labels_job','bad_labels','Test patterns',3,
-            {'source_files':[str(p) for p in footage],'segment_duration':3},lambda *a:None))
+            {'source_files':[str(p) for p in ranking_footage],'segment_duration':3},lambda *a:None))
     project=get_project('bad_labels')
     assert project['status']=='FAILED'
-    assert len(project['result_data']['rejected_sources'])==3
+    assert len(project['result_data']['rejected_sources'])==6
     assert not list(isolated_app['ranking'].glob('*.mp4'))
 
 

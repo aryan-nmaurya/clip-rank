@@ -115,12 +115,17 @@ class CaptionRenderer:
                           stroke_width=2, stroke_fill="black")
         else:
             # Hook is brief and disappears via the overlay enable expression in the renderer.
-            face = font(48, True)
-            lines = wrap(draw, clean_label(title, 9).upper(), face, width - 100)[:2]
+            size=96
+            while True:
+                face=font(size,True)
+                lines=wrap(draw,clean_label(title,9).upper(),face,width-160)
+                if len(lines)<=2 or size<=72:break
+                size-=2
+            if len(lines)>2:raise ValueError('Rewrite the video headline so it fits two large mobile-safe lines.')
             for i, line in enumerate(lines):
-                draw.text((width / 2, 105 + i * 58), line, font=face, anchor="mt",
+                draw.text((width / 2, 105 + i * (size+16)), line, font=face, anchor="mt",
                           fill="#ffe14a" if i == len(lines) - 1 else "white",
-                          stroke_width=4, stroke_fill="black")
+                          stroke_width=6, stroke_fill="black")
         image.save(output_png)
         return output_png
 

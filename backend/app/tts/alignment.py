@@ -1,7 +1,6 @@
 """Measured word timings from an existing local Whisper model; no downloads."""
 import threading
 import json
-import re
 from app.core import config
 from app.core.runtime import check_cancelled
 from app.media.production_qc import ProductionQC
@@ -31,12 +30,15 @@ def align_words(path,text,duration):
         if _model is None or _loaded_path!=directory:
             _model=WhisperModel(str(directory),device='cpu',compute_type='int8',local_files_only=True)
             _loaded_path=directory
-        # A full reference sentence in the ASR prompt can be hallucinated again
-        # during trailing silence. Give only a short spelling glossary instead.
-        terms=list(dict.fromkeys(re.findall(r'\b[A-Z][A-Za-z]{3,}\b',text)))[:12]
-        glossary='Technical terms: '+', '.join(terms) if terms else None
-        stream,_=_model.transcribe(str(path),language='en',word_timestamps=True,initial_prompt=glossary,
-                                   condition_on_previous_text=False,vad_filter=True,beam_size=5)
+        # Independently recognize the waveform. Even a glossary containing the
+        # opening word (e.g. "Watch") can make Whisper treat that word as already
+        # spoken and omit it, then hallucinate extra speech in trailing silence.
+        # These files contain only synthesized speech, often starting at sample
+        # zero. VAD can discard a quiet opening word in a short TTS beat and
+        # make Whisper hallucinate an ending. Decode the complete waveform;
+        # source-footage transcription still uses VAD for noisy recordings.
+        stream,_=_model.transcribe(str(path),language='en',word_timestamps=True,initial_prompt=None,
+                                   condition_on_previous_text=False,vad_filter=False,beam_size=5)
         words=[]
         for segment in stream:
             check_cancelled()

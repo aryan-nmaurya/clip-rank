@@ -14,14 +14,15 @@ from app.storage.manager import StorageManager
 
 def pool():
     return [dict(source_id=str(i),score=100-i,start=0,end=8,event_start=2,payoff_time=4,event_end=5,
-                 label='Rail jump',observed_action='Foot misses rail',topic_evidence='Jump and failed landing') for i in range(7)]
+                 label='Rail jump',observed_action='Foot misses rail',topic_evidence='Jump and failed landing') for i in range(12)]
 
 
 def test_variants_keep_payoffs_and_use_alternative_sources():
     a,b=(ProductionDirector.cuts(pool(),5,k) for k in ('A','B'))
     assert [m['assigned_rank'] for m in a] == [5,4,3,2,1]
-    assert a[-1]['source_id'] == b[-1]['source_id'] == '0'
-    assert {m['source_id'] for m in a} != {m['source_id'] for m in b}
+    assert a[-1]['source_id']=='0' and b[-1]['source_id']=='1'
+    assert {m['source_id'] for m in a}.isdisjoint(m['source_id'] for m in b)
+    assert all(m['end']==m['verified_end'] for m in a+b)
     assert sum(m['end']-m['start'] for m in a) < sum(m['end']-m['start'] for m in b)
     assert all(m['start']<=m['event_start']<m['payoff_time']<=m['event_end']<=m['end'] for m in a+b)
 
@@ -216,3 +217,23 @@ def test_focused_rewrite_rejects_spoilers_then_accepts_a_grounded_cue():
     line=asyncio.run(ProductionDirector.rewrite_tease(Provider(),moment,'A',6,'Outcome was spoken too early'))
     assert line=='Now look between those rooftops'
     with pytest.raises(ValueError):ProductionDirector.validate_line('Your short spoken tease',6)
+
+
+def test_repair_only_the_hook_that_omits_the_subject():
+    class Provider:
+        repairs=0
+        async def generate_text(self,prompt,**kwargs):
+            if prompt.startswith('Repair ONE opening hook'):
+                self.repairs+=1
+                return json.dumps({'hook':'Parkour gets unpredictable'})
+            evidence=json.loads(prompt.split('\n')[-1])
+            return json.dumps({'variants':[{'name':key,'hook':'Parkour gets wild' if key=='A' else 'These jumps get wild',
+                'entries':[{'source_id':m['source_id'],'rank':m['assigned_rank'],
+                    'narration':'Look at those shoes' if key=='A' else 'Keep watching that rail'} for m in cuts]}
+                for key,cuts in evidence['verified_cuts'].items()]})
+    provider=Provider()
+    plans=asyncio.run(ProductionDirector.plan(provider,'fixture',pool(),5,'Parkour fails'))
+    assert provider.repairs==1
+    assert plans['A']['hook']=='Parkour gets wild'
+    assert plans['B']['hook']=='Parkour gets unpredictable'
+    assert plans['B']['moments'][0]['narration_text']==plans['B']['hook']

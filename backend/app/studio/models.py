@@ -52,7 +52,7 @@ class ChannelProfile(BaseModel):
     ai_mode: Literal['auto', 'local', 'gemini'] = 'auto'
     voice_profile: Literal['Curious','Energetic','Tech Curious', 'Tech Energetic', 'Documentary', 'Fast Explainer'] = 'Energetic'
     tts_engine: Literal['pocket', 'kokoro', 'edge'] = 'pocket'
-    privacy: Literal['private', 'unlisted', 'public'] = 'private'
+    privacy: Literal['private', 'unlisted', 'public'] = 'public'
     made_for_kids: bool = False
     retain_final_days: int = Field(default=30, ge=1, le=365)
     affiliates: list[Affiliate] = Field(default_factory=list, max_length=20)

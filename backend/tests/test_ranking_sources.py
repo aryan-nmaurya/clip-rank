@@ -110,7 +110,7 @@ def test_unverified_footage_cannot_render(isolated_app, footage, monkeypatch):
     assert not list(isolated_app['ranking'].glob('*.mp4'))
 
 
-def test_existing_ranking_does_not_fill_a_missing_slot(isolated_app, footage, monkeypatch, ranking_vision):
+def test_existing_ranking_does_not_fill_a_missing_slot(isolated_app, ranking_footage, monkeypatch, ranking_vision):
     def inspect(source,folder):
         rejected = source['id'] == 'source_0'
         return {'rejected':rejected,'reason':'Existing numbered ranking list','ocr_available':True,
@@ -118,9 +118,9 @@ def test_existing_ranking_does_not_fill_a_missing_slot(isolated_app, footage, mo
     monkeypatch.setattr(SourceScreening,'inspect',inspect)
     create_project('reject_test','ranking','Cats')
     create_job('reject_job','reject_test')
-    with pytest.raises(ValueError, match='Existing rankings are never used as replacements'):
+    with pytest.raises(ValueError, match='two Top 3 Shorts need 6 different videos'):
         asyncio.run(RankingPipeline.run('reject_job','reject_test','Cats',3,
-            {'source_files':[str(p) for p in footage], 'segment_duration':3}, lambda *a: None))
+            {'source_files':[str(p) for p in ranking_footage], 'segment_duration':3}, lambda *a: None))
     project = get_project('reject_test')
     assert project['status'] == 'FAILED'
     assert len(project['result_data']['rejected_sources']) == 1

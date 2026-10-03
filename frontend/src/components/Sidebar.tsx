@@ -3,8 +3,8 @@ import { Plus, Flame, Award, Video, Settings as SettingsIcon, Film, Activity, Us
 import { AIStatus } from '../types';
 
 interface SidebarProps {
-  currentTab: 'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'progress' | 'library' | 'settings';
-  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'library' | 'settings') => void;
+  currentTab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'progress' | 'library' | 'settings';
+  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'library' | 'settings') => void;
   aiStatus: AIStatus | null;
   onOpenDiagnostics: () => void;
 }
@@ -77,6 +77,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Award className="w-4 h-4 text-amber-500" />
             <span>Ranking Video</span>
           </button>
+
+          <button onClick={()=>onSelectTab('movie')} className={`w-full h-9 px-3 rounded-lg flex items-center gap-3 text-sm font-medium ${currentTab==='movie'?'bg-violet-50 text-violet-950':'text-zinc-600 hover:bg-zinc-50'}`}><Film className="w-4 h-4 text-violet-600"/>Movie / Trailer</button>
 
           <button
             onClick={() => onSelectTab('library')}

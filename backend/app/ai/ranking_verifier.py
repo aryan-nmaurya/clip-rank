@@ -1,6 +1,7 @@
 """Ranking needs positive semantic evidence; motion or source titles cannot prove a topic."""
 import json
 import math
+import re
 from app.media.captions import clean_label
 
 MIN_TOPIC_CONFIDENCE = .85
@@ -95,19 +96,49 @@ class RankingVerifier:
         return sorted(verified, key=lambda m: m["score"], reverse=True)
 
     @staticmethod
-    async def review(provider, name, moment, image_path, topic):
+    async def review(provider, name, moment, image_path, topic, video_path=None):
+        # Describe the footage before revealing the requested topic/labels.
+        # Otherwise a model can affirm "fail" even for a successful rail run.
+        blind_prompt=(
+            'BLIND SOURCE EVENT REVIEW. Describe only this chronological footage. No intended title or topic is supplied. '
+            'Distinguish intentional rolls, controlled drops, safe landings and planned cartwheels from actual failures. '
+            'Only call an outcome failed when an unintended slip, missed landing, uncontrolled fall or collision is clearly visible. '
+            'If success/failure is uncertain, say uncertain. Watch the ending: the visible event must finish with its outcome and aftermath. '
+            'Do not infer a failure from risky preparation or camera shake. Return ONLY JSON '
+            '{"observed_action":"Specific action and outcome actually visible", "outcome":"successful|failed|uncertain",'
+            '"complete_action":true,"confidence":0.95,"reason":"Specific visible evidence"}.')
+        if video_path is not None and hasattr(provider,'analyze_video'):
+            blind_raw=await provider.analyze_video(video_path,blind_prompt)
+        else:blind_raw=await provider.analyze_images([image_path],blind_prompt)
+        observed=None
+        try:
+            observed=parse_object(blind_raw)
+            if (observed.get('complete_action') is not True or confidence(observed['confidence'])<MIN_TOPIC_CONFIDENCE
+                or observed.get('outcome') not in ('successful','failed')
+                or not isinstance(observed.get('observed_action'),str) or len(observed['observed_action'].strip())<20):
+                raise ValueError('The full event/outcome is not independently visible.')
+            if re.search(r'\bfails?\b',topic,re.I) and observed['outcome']!='failed':
+                raise ValueError('Independent observation shows a successful event, not a visible failure.')
+        except (ValueError,TypeError,KeyError) as exc:
+            return {'passed':False,'method':f'{name} blind source review','reason':str(exc),
+                'independent_observation':observed}
         prompt = (
             "Independently check this exact proposed cut, shown in chronological frames with its final footage framing. "
             "Verify ALL requested subjects, actions and outcomes are visibly present. The whole topic must match; "
             "a parkour attempt without visible failure cannot be called a parkour fail. Source captions are not evidence. "
             "Check that the proposed label and commentary each describe ONLY visible action in THIS cut. "
             "Reject uncertain cases and cuts missing the payoff, or cropping the subject/action out. "
+            "Watch through the END: the full landing, impact, recovery or reaction must finish before the cut. "
+            "An attempt still in progress in the final frames is incomplete even if failure looks likely. "
             "Return ONLY JSON with actual booleans: "
             '{"matches_topic":true,"complete_action":true,"label_matches":true,"commentary_matches":true,'
             '"confidence":0.95,"topic_evidence":"Observed proof","reason":"Observed reason"}.\n'
-            + json.dumps({"requested_topic": topic, "label": moment["label"], "commentary": moment["commentary"]}, ensure_ascii=False)
+            + json.dumps({"requested_topic": topic, "label": moment["label"], "commentary": moment["commentary"],
+                'independent_observation':observed}, ensure_ascii=False)
         )
-        raw = await provider.analyze_images([image_path], prompt)
+        if video_path is not None and hasattr(provider,'analyze_video'):
+            raw=await provider.analyze_video(video_path,prompt)
+        else:raw = await provider.analyze_images([image_path], prompt)
         if not raw:
             raise ValueError(f"{name.title()} could not verify the final cut and its labels. Retry after connecting your vision model.")
         try:
@@ -115,7 +146,8 @@ class RankingVerifier:
             certainty = confidence(result["confidence"])
             passed = all(result.get(key) is True for key in ("matches_topic", "complete_action", "label_matches", "commentary_matches"))
             passed = passed and certainty >= MIN_TOPIC_CONFIDENCE and isinstance(result.get("topic_evidence"), str) and bool(result["topic_evidence"].strip())
-            return {"passed": passed, "confidence": certainty, "method": f"{name} final cut review",
+            return {"passed": passed, "confidence": certainty, "method": f"{name} complete source-video review" if video_path else f"{name} final cut review",
+                    'independent_observation':observed,
                     "topic_evidence": str(result.get("topic_evidence") or "")[:700],
                     "reason": str(result.get("reason") or "The cut or descriptions do not match the requested topic.")[:600]}
         except (ValueError, TypeError, KeyError):

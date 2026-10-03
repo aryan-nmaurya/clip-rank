@@ -1,4 +1,5 @@
 from urllib.parse import urlparse
+import re
 
 
 class RightsPolicyEngine:
@@ -13,14 +14,17 @@ class RightsPolicyEngine:
                 reasons.append('Asset provenance is incomplete.'); continue
             kind=asset['source_type']; license=asset['license'].lower()
             if kind=='cliprank_generated' and asset['creator']=='ClipRank' and license=='original': continue
+            if policy=='user_managed' and asset['rights_status']=='user_authorized' and asset.get('authorization_attested') is True:
+                continue
             if policy=='user_managed' and asset['rights_status']=='user_managed' and license=='unknown': continue
             if asset['rights_status']!='commercial_use_permitted' or not asset.get('license_evidence_url'):
                 reasons.append('Commercial reuse rights are not documented.'); continue
-            if any(term in license for term in ('noncommercial','non-commercial','cc-by-nc','cc-by-nd','unknown')):
+            normalized_license=re.sub(r'[\s_]+','-',license)
+            if any(term in normalized_license for term in ('noncommercial','non-commercial','cc-by-nc','cc-by-nd','unknown')) or re.search(r'cc[\s-]*by[\s-]*(?:nc|nd)',license):
                 reasons.append('The license does not permit this commercial edited use.'); continue
             if asset.get('attribution_required') and not asset.get('attribution'):
                 reasons.append('Required attribution is missing.')
-        managed=any(a.get('rights_status')=='user_managed' for a in assets)
+        managed=any(a.get('rights_status') in ('user_managed','user_authorized') for a in assets)
         return {'passed':not reasons,'policy':policy,'rights_verified':not managed and not reasons,
                 'reason':('Reuse rights are managed by the channel owner; provenance retained.' if managed else 'All assets have explicit production rights.') if not reasons else ' '.join(reasons)}
 

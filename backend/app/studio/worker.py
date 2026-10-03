@@ -126,6 +126,7 @@ class StudioWorker:
             active_productions.pop(task['id'],None)
 
     def publish_due(self):
+        copyright.monitor_uploads()
         profile=store.profile()
         all_tasks=store.tasks()
         # Resolve in-flight uploads first, even when a newer day's plan exists.

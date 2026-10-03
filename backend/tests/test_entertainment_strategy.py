@@ -42,7 +42,7 @@ def test_moment_identity_and_score_ignore_views_and_wrong_niches(visual):
 
 
 def test_format_follows_footage_and_semantically_related_pool(visual):
-    items=[moment(i) for i in range(5)]
+    items=[moment(i) for i in range(10)]
     assert ContentDirector.choose_format(items[0],items)=='ranking'
     assert ContentDirector.choose_format(moment(10,score=96),items)=='viral_clip'
     assert ContentDirector.choose_format(moment(11,context=True),[])=='commentary'
@@ -76,7 +76,7 @@ def test_visual_rating_rejects_unbounded_or_unclear_scores(visual):
     from app.studio.visual_discovery import VisualDiscovery
     class Provider:
         async def analyze_images(self,*args):
-            return json.dumps({'one_second_interest':True,'context_needed':False,'confidence':.96,
+            return json.dumps({'real_world_action':True,'topic_matches':True,'one_second_interest':True,'context_needed':False,'confidence':.96,
                 'reason':'The visible jump has a fast surprising outcome and clear landing.',
                 'dimensions':{k:90 for k in ContentDirector.WEIGHTS}})
     m=moment()['moment']
@@ -96,7 +96,7 @@ def test_autonomous_formats_use_real_footage_engines_and_retain_gates(visual,mon
     from app.pipelines.ranking.ranking_pipeline import RankingPipeline
     from app.core import database
     from app.media.ffmpeg_core import FFmpegCore
-    items=[moment(i,score=95) for i in range(5 if format=='ranking' else 1)]
+    items=[moment(i,score=95) for i in range(10 if format=='ranking' else 1)]
     store.enqueue(items[0]['id'],format)
     task=store.claim('visual-worker')
     async def fake_run(job,project,*args):
@@ -120,3 +120,41 @@ def test_autonomous_formats_use_real_footage_engines_and_retain_gates(visual,mon
     assert result['checks']['rights']['rights_verified'] is False
     assert result['visual_structure']=='real verified footage' and result['metadata']['category_id']=='17'
     assert store.task(task['id'])['status']=='PUBLISH_READY'
+
+
+def test_visual_discovery_rejects_gameplay_and_unverified_old_cards(visual):
+    from app.studio.visual_discovery import VisualDiscovery
+    class Gameplay:
+        async def analyze_images(self,*args):
+            return json.dumps({'real_world_action':False,'topic_matches':True,
+                'one_second_interest':True,'context_needed':False,'confidence':.99,
+                'reason':'A virtual goalkeeper saves the ball inside a soccer video game.',
+                'dimensions':{k:95 for k in ContentDirector.WEIGHTS}})
+    item=moment()
+    with pytest.raises(ValueError,match='interest'):
+        asyncio.run(VisualDiscovery.score(Gameplay(),item['moment'],'fixture','epic_saves','goalkeeper epic save'))
+    old={**item,'opportunity_type':'visual_moment'}
+    assert not ContentDirector.eligible(old) and not ContentDirector.rank([old])
+    real={**old,'real_world_action':True,'topic_matches':True}
+    assert ContentDirector.eligible(real) and ContentDirector.rank([real])
+
+
+def test_production_rejects_weak_discovery_candidate_before_rendering(visual):
+    from fastapi.testclient import TestClient
+    from app.api.server import app
+    item=moment(12,score=50)
+    with TestClient(app,client=('127.0.0.1',50000)) as client:
+        response=client.post('/api/studio/produce',json={'opportunity_id':item['id'],'format':'auto'})
+    assert response.status_code==400 and 'quality threshold' in response.json()['detail']
+    assert not store.tasks()
+
+
+def test_standalone_script_enforces_originality_before_speech_synthesis():
+    from app.ai.production_director import ProductionDirector
+    class ShortLine:
+        async def analyze_images(self,*args,**kwargs):
+            return json.dumps({'complete_story':True,'confidence':.99,'title':'Unexpected parkour landing',
+                'hook':'Watch his shoes','narration':'Watch this','observed_action':'A failed landing',
+                'cuts':[{'start':0,'end':8}]})
+    with pytest.raises(ValueError,match='five grounded words'):
+        asyncio.run(ProductionDirector.plan_viral(ShortLine(),'fixture',{'start':0,'end':8},'fixture',[],force_commentary=True))

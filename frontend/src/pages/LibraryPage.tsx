@@ -10,7 +10,7 @@ interface LibraryPageProps {
 export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState('');
-  const [modeFilter, setModeFilter] = useState<'all' | 'viral' | 'ranking' | 'discovery' | 'autopilot'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot'>('all');
   const [loading, setLoading] = useState(true);
 
   const fetchList = async () => {
@@ -70,8 +70,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
             />
           </div>
 
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-zinc-100 border border-zinc-200/60 self-start text-xs font-medium">
-            {(['all', 'autopilot', 'viral', 'discovery', 'ranking'] as const).map((tab) => (
+          <div className="flex items-center flex-wrap gap-1 p-1 rounded-xl bg-zinc-100 border border-zinc-200/60 self-start text-xs font-medium">
+            {(['all', 'autopilot', 'viral', 'discovery', 'ranking', 'movie'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setModeFilter(tab)}
@@ -81,7 +81,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
                     : 'text-zinc-500 hover:text-zinc-900'
                 }`}
               >
-                {tab === 'all' ? 'All' : tab === 'viral' ? 'Viral Clips' : tab === 'ranking' ? 'Ranking' : tab === 'discovery' ? 'Viral Discovery' : 'Autopilot'}
+                {tab === 'movie' ? 'Movie / Trailer' : tab === 'all' ? 'All' : tab === 'viral' ? 'Viral Clips' : tab === 'ranking' ? 'Ranking' : tab === 'discovery' ? 'Viral Discovery' : 'Autopilot'}
               </button>
             ))}
           </div>
@@ -97,7 +97,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
             <Film className="w-8 h-8 text-zinc-300" />
             <span className="text-sm font-semibold text-zinc-800">No projects yet</span>
             <span className="text-xs text-zinc-400 max-w-sm">
-              Create your first Viral Clips or Ranking Video to see them stored here.
+              Create a Short or Movie Moment to see it stored here.
             </span>
           </div>
         ) : (
@@ -131,7 +131,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
                     <div className="flex flex-col gap-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-zinc-100 text-zinc-700">
-                          {proj.mode === 'viral' ? 'Viral' : proj.mode === 'discovery' ? 'Discovery' : 'Ranking'}
+                          {proj.mode === 'movie' ? 'Movie / Trailer' : proj.mode === 'viral' ? 'Viral' : proj.mode === 'discovery' ? 'Discovery' : 'Ranking'}
                         </span>
                         <span className="text-xs text-zinc-400">·</span>
                         <span className="text-xs text-zinc-500 font-medium">

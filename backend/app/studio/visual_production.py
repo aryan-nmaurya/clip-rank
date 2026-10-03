@@ -28,8 +28,8 @@ class VisualProduction:
             selected=[];seen=set()
             for other in [item,*pool]:
                 if other['source_url'] not in seen: selected.append(other);seen.add(other['source_url'])
-                if len(selected)==8:break
-            if len(selected)<5: raise ValueError('A ranking needs five distinct verified moments on the same topic.')
+                if len(selected)==12:break
+            if len(selected)<10: raise ValueError('Two Top 5 Shorts need ten different unused verified source videos on the same topic.')
         else: selected=[item]
         assets=[asset for other in selected for asset in ContentDirector.assets(other,profile)]
         rights=RightsPolicyEngine.evaluate(assets,profile.rights_policy)
@@ -87,8 +87,8 @@ class VisualProduction:
         best=max(records,key=lambda r:r.get('final_review',{}).get('confidence',0))
         clip_id=best['clip_id']
         title=next(clip['title'] for clip in clips if clip['id']==clip_id)
-        credits='\n'.join(dict.fromkeys(asset.get('attribution') or asset['creator']+': '+asset['source_url'] for asset in assets))
-        result['metadata']={'title':title[:100],'description':item['reason']+'\n\nSources:\n'+credits+'\n\n#Shorts',
+        from app.publishing.youtube import description_preview
+        result['metadata']={**description_preview(clip_id,item['reason']+'\n\n#Shorts'),'title':title[:100],
             'category_id':'17' if item['category'] in ('insane_sports','parkour_freerunning','epic_saves','trick_shots') else '24',
             'privacy':profile.privacy,'made_for_kids':profile.made_for_kids}
         update_project(task['project_id'],status='COMPLETED',result_data=result)

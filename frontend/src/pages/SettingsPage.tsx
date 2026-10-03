@@ -268,6 +268,19 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
         </div>
 
         <YouTubeSettings />
+        <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-sm p-6 flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div><h3 className="text-sm font-semibold text-zinc-900">Video watermark</h3><p className="text-xs text-zinc-500 mt-1">Applied to every new Viral Clip, Ranking Short and Autopilot video at 50% opacity.</p></div>
+            <label className="flex items-center gap-2 text-xs font-medium text-zinc-700 shrink-0">
+              <input type="checkbox" role="switch" aria-label="Enable video watermark" checked={settings.watermark_enabled} onChange={e=>setSettings({...settings,watermark_enabled:e.target.checked})}/>
+              {settings.watermark_enabled?'On':'Off'}
+            </label>
+          </div>
+          <label className="text-xs font-medium text-zinc-700">Watermark text
+            <input type="text" maxLength={60} value={settings.watermark_text} onChange={e=>setSettings({...settings,watermark_text:e.target.value})} placeholder="@yourchannel or your brand name" className="creator-select mt-2"/>
+          </label>
+          <p className="text-[11px] text-zinc-400">Save settings to apply this to future generations. Opacity stays fixed at 50%.</p>
+        </div>
         {/* Section 2: General & Media Options */}
         <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-sm p-6 flex flex-col gap-5">
           <div className="flex items-center gap-2.5 pb-2 border-b border-zinc-100">

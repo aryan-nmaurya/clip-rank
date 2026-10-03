@@ -21,9 +21,10 @@ interface JobProgressPageProps {
   projectId: string;
   jobId: string;
   onNavigateBack: () => void;
+  onTryMovieSource?: () => void;
 }
 
-export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, jobId, onNavigateBack }) => {
+export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, jobId, onNavigateBack, onTryMovieSource }) => {
   const [project, setProject] = useState<Project | null>(null);
   const [selectedClip, setSelectedClip] = useState<OutputClip | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -134,7 +135,7 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider uppercase bg-zinc-200/70 text-zinc-800">
-                {project.mode === 'discovery' ? 'Original Short' : project.mode === 'viral' ? 'Viral Clips' : 'Ranking Video'}
+                {project.mode === 'movie' ? 'Movie / Trailer Moments' : project.mode === 'discovery' ? 'Original Short' : project.mode === 'viral' ? 'Viral Clips' : 'Ranking Video'}
               </span>
               <span className="text-zinc-400 text-xs">·</span>
               <span className="text-zinc-500 text-xs font-medium">
@@ -202,6 +203,7 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
             </div>
 
             {isFailed && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 whitespace-pre-wrap break-words">{job?.error_message || 'Generation failed. Try another source or analysis engine.'}</div>}
+            {isFailed && project.mode==='movie' && <button onClick={onTryMovieSource || onNavigateBack} className="self-start rounded-xl bg-violet-950 text-white px-4 py-2 text-sm font-medium">Try Another Source</button>}
             {/* Progress Bar */}
             {!isFailed && !isCancelled && (
               <div className="w-full h-2 rounded-full bg-zinc-100 overflow-hidden">
@@ -213,11 +215,12 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
             )}
 
             {/* Stage Checklist (Section 7) */}
-            <ProgressStages mode={project.mode} status={job?.status || 'QUEUED'} progress={job?.progress || 10} />
+            <ProgressStages mode={project.mode} format={project.input_data.format} status={job?.status || 'QUEUED'} progress={job?.progress ?? 0} />
           </div>
         )}
 
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        {isCompleted && project.mode==='movie' && <a href={`/api/projects/${project.id}/movie-metadata`} download="metadata.json" className="text-xs text-zinc-500 underline self-start">Download credits and production metadata</a>}
         {project.result_data.warnings?.length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 space-y-2">{project.result_data.warnings.map((warning: string) => <p key={warning}>{warning}</p>)}</div>}
         {project.status === 'COMPLETED' && !project.result_data.production_qc_passed && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800">This older export has not passed the finished-video quality checks. Connect vision in Settings and regenerate it before downloading or publishing.</div>}
         {/* Results Section (Section 41) */}
@@ -225,7 +228,7 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-zinc-900">
               {isCompleted
-                ? project.mode === 'discovery' ? '✓ Your original Short is ready' : project.mode === 'viral' ? '✓ Your Viral Clips are ready' : '✓ Your two Ranking Shorts are ready'
+                ? project.mode === 'movie' ? '✓ Your movie clips are ready' : project.mode === 'discovery' ? '✓ Your original Short is ready' : project.mode === 'viral' ? '✓ Your Viral Clips are ready' : '✓ Your two Ranking Shorts are ready'
                 : 'Generated Outputs'}
             </h3>
             {isCompleted && (
@@ -275,7 +278,7 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
                       </div>
 
                       {/* Score or Rank Badge */}
-                      {clip.viral_score && (
+                      {project.mode !== 'movie' && clip.viral_score && (
                         <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-md bg-emerald-600/90 text-white text-[11px] font-bold">
                           Potential {clip.viral_score}/100
                         </div>
@@ -327,21 +330,26 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
       {project.mode==='discovery'&&project.result_data.research&&<div className="max-w-4xl w-full bg-white border rounded-2xl p-5 mb-8"><h3 className="font-semibold">Research & original production</h3><p className="text-sm text-zinc-500 mt-2">Original narration and edited visuals with source provenance. Production checks passed; copyright clearance is required before publishing.</p><a className="text-sm underline mt-3 inline-block" href={project.result_data.research.source_url} target="_blank" rel="noreferrer">View original source</a></div>}
       {project.mode!=='discovery'&&project.result_data.moments?.length > 0 && <div className="max-w-4xl w-full bg-white border border-zinc-200 rounded-2xl p-5 mb-8">
         <h3 className="text-sm font-semibold mb-1">Selected moments & source credits</h3>
-        <p className="text-xs text-zinc-400 mb-4">Potential scores are estimates based on source evidence. {project.result_data.analysis_basis}</p>
+        <p className="text-xs text-zinc-400 mb-4">{project.mode === 'movie' ? 'Verified movie moments with source timestamps and retained credits.' : <>Potential scores are estimates based on source evidence. {project.result_data.analysis_basis}</>}</p>
         <div className="space-y-3">{project.result_data.moments.map((moment: any, index: number) => <div key={index} className="border-t border-zinc-100 pt-3 text-xs flex gap-4">
           <span className="font-bold w-7 shrink-0">{moment.assigned_rank ? `#${moment.assigned_rank}` : index + 1}</span>
-          <div className="flex-1"><p className="font-medium">{moment.label || moment.title}</p><p className="text-zinc-500 mt-1">{Number(moment.start).toFixed(1)}–{Number(moment.end).toFixed(1)}s · {moment.score}/100 · {moment.analysis_basis}</p><p className="text-zinc-500 mt-1">{moment.reason}</p>
+          <div className="flex-1"><p className="font-medium">{moment.label || moment.title || moment.analysis?.title}</p><p className="text-zinc-500 mt-1">{Number(moment.analysis?.start ?? moment.start).toFixed(1)}–{Number(moment.analysis?.end ?? moment.end).toFixed(1)}s{project.mode === 'movie' ? ` · ${{ DIALOGUE: 'Dialogue', COMMENTARY: 'Commentary', AESTHETIC: 'Cinematic' }[moment.format as string] || 'Movie moment'}` : <> · {moment.score}/100 · {moment.analysis_basis}</>}</p><p className="text-zinc-500 mt-1">{moment.reason || moment.analysis?.description}</p>
             {moment.narration_text && <p className="text-zinc-600 mt-1">Commentary: {moment.narration_text}</p>}
             {moment.screening && <p className="text-emerald-700 mt-1">Passed source screening · {moment.screening.method} · {moment.screening.sample_count} frames</p>}
             {moment.topic_verified && <p className="text-emerald-700 mt-1">Verified topic: {moment.verified_topic} · {Math.round(moment.topic_confidence * 100)}% model confidence</p>}
             {moment.topic_evidence && <p className="text-zinc-600 mt-1">Visible evidence: {moment.topic_evidence}</p>}
-            {moment.final_review?.passed && <p className="text-emerald-700 mt-1">Final cut, label and commentary passed visual review.</p>}
+            {moment.final_review?.passed && <p className="text-emerald-700 mt-1">{project.mode === 'movie' ? 'Finished video and audio passed quality review.' : 'Final cut, label and commentary passed visual review.'}</p>}
+            {project.mode === 'movie' && moment.attribution && <p className="text-zinc-500 mt-1">Credits: {moment.attribution}</p>}
             {moment.url && <a href={moment.url} target="_blank" rel="noreferrer" className="inline-block mt-1 underline text-zinc-600">{moment.platform || 'Source'}{moment.creator ? ` · ${moment.creator}` : ''}</a>}</div>
         </div>)}</div>
       </div>}
       {project.result_data.rejected_sources?.length > 0 && <details className="max-w-4xl w-full bg-white border border-zinc-200 rounded-2xl p-5 mb-8 text-xs">
         <summary className="cursor-pointer font-semibold">Excluded sources ({project.result_data.rejected_sources.length})</summary>
         <div className="space-y-3 mt-4">{project.result_data.rejected_sources.map((source: any, index: number) => <div key={index} className="border-t border-zinc-100 pt-3"><p className="font-medium">{source.title || source.url || 'Source video'}</p><p className="text-zinc-500 mt-1">{source.reason}</p></div>)}</div>
+      </details>}
+      {project.result_data.rejected_moments?.length > 0 && <details className="max-w-4xl w-full bg-white border border-zinc-200 rounded-2xl p-5 mb-8 text-xs">
+        <summary className="cursor-pointer font-semibold">Excluded moments ({project.result_data.rejected_moments.length})</summary>
+        <div className="space-y-3 mt-4">{project.result_data.rejected_moments.map((moment: any,index:number)=><div key={index} className="border-t border-zinc-100 pt-3"><p className="font-medium">{Number(moment.start).toFixed(1)}–{Number(moment.end).toFixed(1)}s</p><p className="text-zinc-500 mt-1">{moment.reason}</p></div>)}</div>
       </details>}
       {/* Video Modal Player */}
       <VideoModal clip={selectedClip} onClose={() => setSelectedClip(null)} />

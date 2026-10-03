@@ -215,8 +215,8 @@ async def preview_neural_voice(voice: str):
 # Project Creation: Workflow A (Viral Clips) & Workflow B (Ranking)
 # -------------------------------------------------------------------
 
-async def save_upload(upload: UploadFile, project_id: str, index=0):
-    folder = PROJECTS_STORAGE_DIR / project_id / "sources"
+async def save_upload(upload: UploadFile, project_id: str, index=0, job_id=None):
+    folder = StorageManager.get_job_temp_dir(job_id)/'ingress' if job_id else PROJECTS_STORAGE_DIR / project_id / "sources"
     folder.mkdir(parents=True, exist_ok=True)
     suffix = Path(upload.filename or "source.mp4").suffix.lower()
     if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}:
@@ -254,8 +254,8 @@ def validate_urls(urls):
         raise HTTPException(400, str(exc)) from exc
 
 
-def enqueue_project(project_id, mode, title, data):
-    job_id = f"job_{uuid.uuid4().hex[:12]}"
+def enqueue_project(project_id, mode, title, data, job_id=None):
+    job_id = job_id or f"job_{uuid.uuid4().hex[:12]}"
     create_project(project_id, mode, title, input_data=data)
     create_job(job_id, project_id)
     job_engine.submit_job(job_id)
@@ -267,8 +267,8 @@ async def create_viral_project(video_url: Optional[str] = Form(None), count: int
                                ai_provider: str = Form("auto"), video_file: Optional[UploadFile] = File(None),
                                target_duration: float = Form(25), layout: str = Form("fit"),
                                captions: bool = Form(True)):
-    if not 1 <= count <= 10 or not 6 <= target_duration <= 60:
-        raise HTTPException(400, "Choose 1–10 clips with a target duration of 6–60 seconds.")
+    if not 1 <= count <= 10 or not 10.1 <= target_duration <= 60:
+        raise HTTPException(400, "Choose 1–10 clips with a target duration longer than 10 seconds, up to 60 seconds.")
     validate_provider(ai_provider)
     if layout not in {"fill", "fit"}:
         raise HTTPException(400, "Unknown framing layout.")
@@ -295,8 +295,8 @@ async def create_ranking_project(req: RankingCreateRequest):
         raise HTTPException(400, "Topic is required.")
     count = req.count or inferred
     urls = validate_urls(req.source_urls)
-    if urls and len(set(urls)) < count:
-        raise HTTPException(400, f"Top {count} needs at least {count} distinct source links.")
+    if urls and len(set(urls)) < count*2:
+        raise HTTPException(400, f"Two Top {count} Shorts need at least {count*2} distinct unused source links.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
     overrides = req.model_dump()
     if req.voice:
@@ -320,8 +320,8 @@ async def create_ranking_upload(topic: str = Form(...), count: int = Form(5),
     validate_provider(ai_provider)
     if not narration:
         raise HTTPException(400, 'Production ranking requires original narration and timed captions.')
-    if layout not in {"fill", "fit"} or not count <= len(video_files) <= 20:
-        raise HTTPException(400, f"Upload between {count} and 20 distinct videos and choose a valid layout.")
+    if layout not in {"fill", "fit"} or not count*2 <= len(video_files) <= 20:
+        raise HTTPException(400, f"Upload between {count*2} and 20 distinct unused videos for the two Shorts and choose a valid layout.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
     voice_settings = {}
     if voice:
@@ -395,7 +395,9 @@ async def api_regenerate_project(project_id: str):
 
     if p.get("status") in {"PROCESSING", "CREATED"}:
         raise HTTPException(409, "This project already has an active job.")
-    update_project(project_id, status="CREATED", result_data={})
+    if p['mode']=='movie' and not str(p['input_data'].get('video_source','')).startswith(('http://','https://')) and not Path(p['input_data'].get('video_source','')).is_file():
+        raise HTTPException(409,'The temporary upload was cleaned after this job. Upload another authorized source to generate new moments.')
+    update_project(project_id, status="CREATED", result_data=p.get('result_data',{}) if p['mode']=='movie' else {})
     new_job_id = f"job_regen_{uuid.uuid4().hex[:8]}"
     create_job(job_id=new_job_id, project_id=project_id)
     job_engine.submit_job(new_job_id)

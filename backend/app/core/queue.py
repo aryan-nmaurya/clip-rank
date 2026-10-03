@@ -6,6 +6,7 @@ from app.core.events import EventBroadcaster
 from app.storage.manager import StorageManager
 from app.pipelines.ranking.ranking_pipeline import RankingPipeline
 from app.pipelines.viral.viral_pipeline import ViralPipeline
+from app.pipelines.movie.movie_pipeline import MoviePipeline
 
 logger = logging.getLogger("ai_shorts.queue")
 
@@ -59,8 +60,11 @@ class JobEngine:
 
         try:
             async with self.capacity:
-                update_project(project["id"], status="PROCESSING", result_data={})
-                if project["mode"] == "ranking":
+                update_project(project["id"], status="PROCESSING", result_data=project.get('result_data',{}) if project['mode']=='movie' else {})
+                if project['mode']=='movie':
+                    await MoviePipeline.run(job_id,project['id'],data.get('video_source') or data.get('video_url'),
+                                            data.get('count',3),settings,on_progress)
+                elif project["mode"] == "ranking":
                     await RankingPipeline.run(job_id, project["id"], data.get("topic") or project["title"],
                                               data.get("count", 5), settings, on_progress)
                 else:

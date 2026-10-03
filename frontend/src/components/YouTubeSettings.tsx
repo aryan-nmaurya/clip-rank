@@ -44,6 +44,8 @@ export const YouTubeSettings: React.FC = () => {
   return <section className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 space-y-4">
     <div className="flex items-center gap-2 border-b border-zinc-100 pb-3"><Upload className="w-5 h-5 text-red-600" /><h3 className="text-sm font-semibold">YouTube direct upload</h3></div>
     <p className="text-xs text-zinc-500">Connect once, then upload each finished reel with one click. Video transfer and progress stay in the app; uploads never redirect to YouTube Studio.</p>
+    <p className="text-xs text-zinc-500">Uploads start private. ClipRank monitors processing and rejections automatically. Confirm the copyright verdict from Studio once; ClipRank then applies your chosen visibility. The standard YouTube API does not expose that verdict.</p>
+    <p className="text-xs text-zinc-500">Descriptions: 13 dot lines, creator credits without links, then a summary of what happens in the Short. Each upload includes 32 relevant YouTube keyword tags.</p>
     <p className={`text-xs font-medium ${connection?.connected ? 'text-emerald-700' : 'text-zinc-600'}`}>{connection?.connected ? `Connected channel: ${connection.channel_title}` : connection?.configured ? 'OAuth client ready. Connect your channel below.' : 'Add a Desktop app OAuth client JSON to connect.'}</p>
     <details className="text-xs text-zinc-600"><summary className="cursor-pointer font-medium">One-time Google setup</summary><ol className="list-decimal ml-4 space-y-2 mt-3">
       <li>In <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noreferrer" className="underline">Google Cloud</a>, enable YouTube Data API v3.</li>

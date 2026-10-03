@@ -2,6 +2,17 @@ import { Project, Job, Settings, AIStatus, Diagnostics, YouTubeConnection, YouTu
 
 const API_BASE = '/api';
 
+export async function createMovieProject(data:FormData):Promise<{job_id:string;project_id:string}>{
+  const response=await fetch(`${API_BASE}/projects/movie`,{method:'POST',body:data});
+  if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error.detail||'Movie generation could not start.');}
+  return response.json();
+}
+export async function importMovieMusic(data:FormData):Promise<any>{
+  const response=await fetch(`${API_BASE}/movie/music`,{method:'POST',body:data});
+  if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error.detail||'Music rights or audio could not be validated.');}
+  return response.json();
+}
+
 export async function studioRequest(path:string,payload?:unknown):Promise<any> {
   const response=await fetch(`${API_BASE}/studio${path}`,payload===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const data=await response.json();
@@ -25,6 +36,8 @@ export const configureYouTube = (payload: { client_document?: unknown; privacy: 
 export const connectYouTube = (): Promise<{ authorization_url: string }> => youtubeRequest('/connect', {});
 export const disconnectYouTube = (): Promise<YouTubeConnection> => youtubeRequest('/disconnect', {});
 export const getYouTubeUpload = (clipId: string): Promise<YouTubeUpload | null> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}`);
+export const previewYouTubeDescription = (clipId:string,description:string):Promise<{description:string;tags:string[];tag_characters:number}> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}/preview`,{description});
+export const updateYouTubeDescription = (clipId:string):Promise<YouTubeUpload> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}/description`,{});
 export const getCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}`);
 export const refreshCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/check`,{});
 export const confirmCopyrightCheck = (clipId:string,verdict:string,note:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/review`,{verdict,note});

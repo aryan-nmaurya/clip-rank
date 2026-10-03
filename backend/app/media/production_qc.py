@@ -10,6 +10,14 @@ from app.media.moments import MomentAnalyzer
 
 
 class ProductionQC:
+    MIN_DURATION=10.1
+
+    @classmethod
+    def require_duration(cls,duration):
+        if not isinstance(duration,(int,float)) or not math.isfinite(duration) or duration<cls.MIN_DURATION:
+            raise ValueError('Every finished Short must be longer than 10 seconds. Select a longer complete moment; looping or frozen padding is not allowed.')
+        return True
+
     @staticmethod
     def validate_words(words, duration, expected_text=None):
         previous = -1.
@@ -27,7 +35,7 @@ class ProductionQC:
         return True
 
     @staticmethod
-    def master_audio(video, output):
+    def master_audio(video, output, settings=None):
         measurement = run_process(['ffmpeg','-v','info','-i',str(video),'-vn','-af',
             'loudnorm=I=-14:TP=-2:LRA=8:print_format=json','-f','null','-'], include_stderr=True).decode(errors='replace')
         matches = re.findall(r'\{\s*"input_i".*?\}', measurement, re.S)
@@ -41,8 +49,16 @@ class ProductionQC:
             f'measured_I={numbers[0]}:measured_TP={numbers[1]}:measured_LRA={numbers[2]}:'
             f'measured_thresh={numbers[3]}:offset={numbers[4]},aresample=48000,'
             'alimiter=limit=0.8:level=false:latency=true')
-        run_process(['ffmpeg','-v','error','-y','-i',str(video),'-c:v','copy','-af',normalize,
-                     '-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',str(output)])
+        cmd=['ffmpeg','-v','error','-y','-i',str(video)]
+        if (settings or {}).get('watermark_enabled'):
+            from app.media.watermark import Watermark
+            info=FFmpegCore.get_video_info(video)
+            graphic=Watermark.render(output.parent/'watermark.png',info['width'],info['height'],settings.get('watermark_text',''))
+            cmd+=['-i',str(graphic),'-filter_complex','[0:v][1:v]overlay=0:0:eof_action=repeat[outv]',
+                  '-map','[outv]','-map','0:a:0','-c:v','libx264','-crf','18','-preset','veryfast','-pix_fmt','yuv420p']
+        else:cmd+=['-map','0:v:0','-map','0:a:0','-c:v','copy']
+        run_process(cmd+['-af',normalize,'-c:a','aac','-b:a','192k','-ar','48000','-ac','2',
+                         '-movflags','+faststart',str(output)])
         return output
 
     @staticmethod

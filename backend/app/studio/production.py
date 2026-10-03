@@ -147,7 +147,7 @@ class StudioProduction:
         if not 24<=cursor<=55: raise ValueError('Narration pacing is outside the 25–50 second production range. Rewrite; do not speed up speech.')
         stage('RENDERING',75)
         joined=await run_blocking(FFmpegCore.concatenate_clips,clips,folder/'renders'/'joined.mp4')
-        final=await run_blocking(ProductionQC.master_audio,joined,folder/'renders'/'final.mp4')
+        final=await run_blocking(ProductionQC.master_audio,joined,folder/'renders'/'final.mp4',settings)
         stage('QC',85)
         (folder/'transcripts'/'accepted_script.json').write_text(json.dumps(script,indent=2))
         checkpoint['timeline']=timeline

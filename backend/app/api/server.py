@@ -11,6 +11,7 @@ from app.storage.manager import StorageManager
 from app.api.routes import router
 from app.api.youtube_routes import router as youtube_router
 from app.api.studio_routes import router as studio_router
+from app.api.movie_routes import router as movie_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,9 +24,24 @@ async def lifespan(app: FastAPI):
     from app.publishing.youtube import recover_interrupted
     recover_interrupted()
     StorageManager.startup_cleanup()
+    movie_recovery=[]
     with get_connection() as conn:
+        movie_recovery=[row['id'] for row in conn.execute("SELECT j.id FROM jobs j JOIN projects p ON p.id=j.project_id WHERE p.mode='movie' AND j.status NOT IN ('COMPLETED','FAILED','CANCELLED')")]
         conn.execute("UPDATE jobs SET status='FAILED', current_stage='Interrupted', error_message='Generation was interrupted by a server restart. Retry this project.' WHERE status NOT IN ('COMPLETED','FAILED','CANCELLED') AND id NOT IN (SELECT id FROM studio_tasks)")
         conn.execute("UPDATE projects SET status='FAILED' WHERE status IN ('PROCESSING','CREATED') AND id NOT IN (SELECT project_id FROM studio_tasks)")
+    if movie_recovery:
+        from app.core.queue import JobEngine
+        from app.core.database import get_job,get_project,update_project,update_job
+        for identifier in movie_recovery:
+            job=get_job(identifier);project=get_project(job['project_id'])
+            saved=project.get('result_data',{});checkpoint=saved.get('movie_checkpoint',{})
+            attempts=checkpoint.get('restart_attempts',0)
+            source=project['input_data'].get('video_source','')
+            if attempts>=3 or (not source.startswith(('http://','https://')) and not Path(source).is_file()):continue
+            checkpoint['restart_attempts']=attempts+1;saved['movie_checkpoint']=checkpoint
+            update_project(project['id'],status='CREATED',result_data=saved)
+            update_job(identifier,status='QUEUED',current_stage='Resuming movie production',error_message=None)
+            JobEngine.get_instance().submit_job(identifier)
     worker_task=asyncio.create_task(StudioWorker().run())
     yield
     worker_task.cancel()
@@ -50,12 +66,13 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 app.include_router(youtube_router, prefix="/api")
 app.include_router(studio_router, prefix="/api")
+app.include_router(movie_router, prefix="/api")
 
 # Final media is served only after QC, including direct/guessed URLs.
 @app.get('/output/{mode}/{filename}')
 def production_media(mode: str, filename: str):
-    from app.storage.manager import VIRAL_OUTPUT_DIR, RANKING_OUTPUT_DIR
-    if mode not in ('viral','ranking') or '/' in filename or '\\' in filename:
+    from app.storage.manager import VIRAL_OUTPUT_DIR, RANKING_OUTPUT_DIR, MOVIE_OUTPUT_DIR
+    if mode not in ('viral','ranking','movie') or '/' in filename or '\\' in filename:
         raise HTTPException(404,'Media not found')
     preview=filename.endswith('_preview.jpg')
     clip_id=filename[:-12] if preview else filename[:-4] if filename.endswith('.mp4') else ''
@@ -63,7 +80,7 @@ def production_media(mode: str, filename: str):
     if not clip_passed_production_qc(clip): raise HTTPException(404,'Approved media not found')
     field='preview_path' if preview else 'video_path'
     if clip.get(field)!=f'/output/{mode}/{filename}': raise HTTPException(404,'Media not found')
-    directory=VIRAL_OUTPUT_DIR if mode=='viral' else RANKING_OUTPUT_DIR
+    directory={'viral':VIRAL_OUTPUT_DIR,'ranking':RANKING_OUTPUT_DIR,'movie':MOVIE_OUTPUT_DIR}[mode]
     path=(directory/filename).resolve()
     if not path.is_relative_to(directory.resolve()) or not path.is_file(): raise HTTPException(404,'Media not found')
     return FileResponse(path,media_type='image/jpeg' if preview else 'video/mp4')

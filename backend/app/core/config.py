@@ -12,6 +12,7 @@ PROJECTS_STORAGE_DIR = STORAGE_DIR / "projects"
 OUTPUT_STORAGE_DIR = STORAGE_DIR / "output"
 VIRAL_OUTPUT_DIR = OUTPUT_STORAGE_DIR / "viral"
 RANKING_OUTPUT_DIR = OUTPUT_STORAGE_DIR / "ranking"
+MOVIE_OUTPUT_DIR = OUTPUT_STORAGE_DIR / "movie"
 
 DATA_DIR = BACKEND_DIR / "data"
 DB_PATH = DATA_DIR / "app.db"
@@ -24,6 +25,7 @@ for directory in [
     OUTPUT_STORAGE_DIR,
     VIRAL_OUTPUT_DIR,
     RANKING_OUTPUT_DIR,
+    MOVIE_OUTPUT_DIR,
     DATA_DIR,
 ]:
     directory.mkdir(parents=True, exist_ok=True)

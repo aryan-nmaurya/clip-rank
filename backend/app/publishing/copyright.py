@@ -51,7 +51,11 @@ def refresh(clip_id,force=False):
     elif processing=='succeeded' or status.get('uploadStatus')=='processed':
         state=previous.get('state') if same and previous.get('state') in ('PASSED','BLOCKED','PUBLISHED','PUBLISHING') else 'PENDING_REVIEW'
         if state=='PUBLISHING' and time.time()-previous.get('reserved_at',0)>120:state='PASSED'
-        message='YouTube processing passed. Confirm the actual copyright check result; processing is not copyright clearance.'
+        message={'PASSED':'Copyright review passed. Awaiting automatic publication.',
+                 'PUBLISHED':'Released after confirmed copyright review.',
+                 'PUBLISHING':'Publishing the copyright-cleared video.',
+                 'BLOCKED':'Copyright review reported an unresolved issue.'}.get(state,
+                 'YouTube processing passed. Confirm the actual Studio copyright result; processing is not copyright clearance.')
     data={**(previous if same else {}),**binding,'state':state,'message':message,'checked_at':time.time(),
           'youtube_status':status,'processing_status':processing,'copyright_verdict_source':'owner_review' if same and previous.get('reviewed_at') else None}
     return save(clip_id,data)
@@ -66,6 +70,47 @@ def record_review(clip_id,verdict,note):
     current.update(state='PASSED' if verdict=='passed' else 'BLOCKED',review_note=note.strip(),reviewed_at=time.time(),
         copyright_verdict_source='owner_review',message='Copyright check confirmed clear by channel owner.' if verdict=='passed' else 'Copyright review reported an unresolved issue.')
     return save(clip_id,current)
+
+
+def auto_release(clip_id,force=False):
+    """Release manually uploaded videos after an actual recorded review.
+
+    Studio productions retain their daily selection, schedule and spacing gates.
+    """
+    upload=youtube.get_upload(clip_id)
+    if not upload or not upload['metadata'].get('auto_release_after_copyright',
+            upload['metadata'].get('copyright_gate') and upload['metadata'].get('privacy')!='private'):return
+    with get_connection() as c:
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='studio_tasks'").fetchone():
+            if c.execute('SELECT 1 FROM studio_tasks WHERE clip_id=? AND day IS NOT NULL',(clip_id,)).fetchone():return
+    current=read(clip_id)
+    if current.get('state')!='PASSED':return
+    if not force and time.time()-current.get('release_attempt_at',0)<120:return
+    current['release_attempt_at']=time.time();save(clip_id,current)
+    try:release(clip_id)
+    except (youtube.YouTubeError,requests.RequestException,OSError) as exc:
+        current=read(clip_id)
+        current['message']='Copyright review passed; publication is pending. '+(
+            str(exc) if isinstance(exc,youtube.YouTubeError) else 'Could not reach YouTube. ClipRank will retry.')
+        save(clip_id,current)
+
+
+def monitor_uploads():
+    """Poll staged uploads independently of whether daily Autopilot is enabled."""
+    with get_connection() as c:
+        clips=[row['clip_id'] for row in c.execute("SELECT clip_id FROM youtube_uploads WHERE status='UPLOADED'")]
+    for clip_id in clips:
+        upload=youtube.get_upload(clip_id)
+        if not upload['metadata'].get('auto_release_after_copyright',
+                upload['metadata'].get('copyright_gate') and upload['metadata'].get('privacy')!='private'):continue
+        previous=read(clip_id)
+        if previous['state'] in ('PUBLISHED','BLOCKED'):continue
+        if previous.get('state')=='PASSED':
+            auto_release(clip_id);continue
+        try:
+            refresh(clip_id)
+            auto_release(clip_id)
+        except (youtube.YouTubeError,requests.RequestException,OSError):continue
 
 
 def release(clip_id,autonomous=False):

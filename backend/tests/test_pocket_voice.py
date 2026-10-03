@@ -128,3 +128,12 @@ def test_pocket_retries_rejected_audio_once_without_relaxing_checks(monkeypatch,
     with pytest.raises(RuntimeError,match='encoder'):
         asyncio.run(PocketTTS.synthesize_timed('Number five.',tmp_path/'voice.wav'))
     assert call.call_count==1
+
+
+def test_readiness_does_not_synthesize_a_tiny_asr_probe(monkeypatch):
+    from app.tts.voice_engine import TTSEngine
+    from app.tts.pocket import PocketTTS
+    monkeypatch.setattr(PocketTTS,'status',lambda:{'ready':True})
+    def unused(*args,**kwargs):raise AssertionError('Readiness must not synthesize disposable narration')
+    monkeypatch.setattr(PocketTTS,'_synthesize',unused)
+    assert TTSEngine.validate_ready('pocket:alba')=='pocket:alba'

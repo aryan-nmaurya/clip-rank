@@ -2,12 +2,12 @@ import React from 'react';
 import { Flame, Award, ArrowRight, Sparkles, Video, Play } from 'lucide-react';
 
 interface HomePageProps {
-  onSelectFlow: (flow: 'viral' | 'ranking' | 'discovery' | 'autopilot') => void;
+  onSelectFlow: (flow: 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot') => void;
 }
 
 export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
   return (
-    <div className="flex-1 h-screen overflow-y-auto flex flex-col items-center justify-center p-8 bg-[#FAF9F6]">
+    <div className="flex-1 h-screen overflow-y-auto flex flex-col items-center p-8 bg-[#FAF9F6]">
       <div className="max-w-3xl w-full flex flex-col gap-10 pb-12">
         {/* Header */}
         <div className="flex flex-col gap-2 text-center items-center">
@@ -25,6 +25,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
 
         <button onClick={()=>onSelectFlow('autopilot')} className="rounded-3xl bg-cyan-950 text-white text-left p-7"><h2 className="text-xl font-bold">Run your content studio</h2><p className="text-sm text-cyan-100 mt-2">Extreme, unbelievable & funny moments · Discovery, original commentary, copyright checks and publishing.</p><span className="inline-block mt-4 font-semibold text-sm">Open Autopilot →</span></button>
         <button onClick={()=>onSelectFlow('discovery')} className="text-left rounded-2xl border bg-white p-6"><h2 className="font-bold text-lg">Viral Discovery</h2><p className="text-sm text-zinc-500 mt-1">Discover what to create. Discover extraordinary footage and produce original viral clips, rankings or commentary.</p></button>
+        <button onClick={()=>onSelectFlow('movie')} className="rounded-2xl border border-violet-200 bg-white p-6 text-left flex items-center gap-5 hover:border-violet-500 transition-colors"><div className="rounded-2xl bg-violet-50 p-4 text-violet-700"><Video size={26}/></div><div className="flex-1"><h2 className="font-bold text-lg">Movie / Trailer Moments</h2><p className="text-sm text-zinc-500 mt-1">Turn cinematic scenes into engaging Shorts automatically.</p><span className="text-xs font-semibold text-violet-800 inline-block mt-3">Create Movie Clips →</span></div></button>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Workflow A: Viral Clips */}
           <div

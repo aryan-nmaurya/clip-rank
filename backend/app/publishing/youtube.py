@@ -56,7 +56,7 @@ def connection_status():
     channel = data.get('channel', {})
     return {'configured': bool(data.get('client_id')), 'connected': bool(data.get('refresh_token') and channel),
             'channel_title': channel.get('title'), 'channel_id': channel.get('id'),
-            'default_privacy': data.get('default_privacy', 'private'),
+            'default_privacy': data.get('default_privacy', 'public'),
             'default_made_for_kids': data.get('default_made_for_kids', False),
             'secure_storage_ready':SecretVault.ready(), 'analytics_connected':'https://www.googleapis.com/auth/yt-analytics.readonly' in data.get('scopes','')}
 
@@ -66,7 +66,7 @@ def _assert_idle():
         raise YouTubeError('Wait for the active upload before changing the YouTube connection.')
 
 
-def configure(client_document=None, privacy='private', made_for_kids=False):
+def configure(client_document=None, privacy='public', made_for_kids=False):
     with _lock:
         _assert_idle()
         data = _read_auth()
@@ -230,16 +230,101 @@ def _credits(clip):
             sources = matching
     lines = []
     for source in sources:
-        if isinstance(source, dict) and source.get('url'):
-            lines.append(f"{source.get('creator') or source.get('title') or 'Source'}: {source['url']}")
+        if isinstance(source, dict):
+            credit=source.get('attribution') or source.get('creator') or source.get('title')
+            if credit:
+                credit=_without_links(str(credit)).rstrip(': ')
+                license=source.get('license')
+                if license and str(license).lower() not in ('unknown','unverified') and str(license).lower() not in credit.lower():
+                    credit+=f' ({license})'
+                lines.append(credit)
+            music=(source.get('music') or {}).get('provenance') or {}
+            music_credit=music.get('attribution')
+            if music_credit:
+                lines.append(_without_links(str(music_credit)).rstrip(': '))
     if not lines and project.get('input_data', {}).get('video_url'):
-        lines.append('Source: ' + project['input_data']['video_url'])
+        lines.append('Source creator not provided')
     for voice in result.get('voice_provenance',[]):
         if voice.get('engine')=='pocket-tts':
             from app.tts.pocket import PocketTTS
             # Use the server-maintained attribution, not arbitrary stored text.
             lines.extend(PocketTTS.provenance(voice['voice'])['credits'])
-    return '\n'.join(dict.fromkeys(lines))
+    return '\n'.join(dict.fromkeys(_without_links(line).rstrip(': ') for line in lines if _without_links(line)))
+
+
+DESCRIPTION_PREFIX='\n'.join(['.']*13)
+
+
+def _without_links(text):
+    # Keep human-readable credit labels, including Markdown link labels.
+    text=re.sub(r'\[([^\]]+)\]\([^)]*\)',r'\1',text)
+    text=re.sub(r'(?i)\b(?:https?://|www\.)[^\s<>]+', '', text)
+    text=re.sub(r'(?i)\b(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,63}(?::\d+)?(?:/[^\s<>]*)?', '', text)
+    return '\n'.join(re.sub(r'[ \t]+',' ',line).strip() for line in text.splitlines()).strip()
+
+
+def description_preview(clip_id,description=''):
+    clip=database.get_clip(clip_id)
+    if not clip: raise YouTubeError('The finished clip was not found.')
+    body=_without_links(description).splitlines()
+    while body and body[0].strip() in ('','.'):body.pop(0)
+    # Replace older generated credit sections instead of duplicating them.
+    clean=[];in_credits=False
+    for line in body:
+        if line.strip().lower().rstrip(':') in ('credits','source credits','sources'):
+            in_credits=True;continue
+        if in_credits and not line.strip():in_credits=False;continue
+        if not in_credits:clean.append(line)
+    credits=_credits(clip) or 'User-provided footage'
+    text=DESCRIPTION_PREFIX+'\n\nCredits:\n'+credits
+    from app.publishing.metadata import scene_description,scene_tags,tag_characters
+    scene=_without_links(scene_description(clip,database.get_project(clip['project_id']) or {}))
+    text+='\n\nAbout this Short:\n'+scene
+    extra='\n'.join(clean).strip()
+    # A regenerated preview or retry must not repeat its automatic scene summary.
+    extra=re.sub(r'(?is)^About this Short:?\s*\n.*?(?:\n\n|$)','',extra).strip()
+    if extra:text+='\n\n'+extra
+    if len(text.encode('utf-8'))>5000 or any(c in text for c in '<>'):
+        raise YouTubeError('The description including credits must fit within 5,000 bytes without < or >.')
+    try:tags=scene_tags(scene)
+    except ValueError as exc:raise YouTubeError(str(exc)) from exc
+    return {'description':text,'tags':tags,'tag_characters':tag_characters(tags),'scene_description':scene}
+
+
+def update_uploaded_description(clip_id):
+    """Apply the requested description layout to an existing upload, preserving visibility."""
+    from app.publishing.copyright import identity
+    with _lock:
+        upload,_=identity(clip_id)
+        preview=description_preview(clip_id,upload['metadata'].get('description',''))
+        text,tags=preview['description'],preview['tags']
+        saved_tags=upload['metadata'].get('tags',[])
+        if text==upload['metadata'].get('description') and len(saved_tags)==len(tags) and set(saved_tags)==set(tags):return get_upload(clip_id)
+        headers={'Authorization':'Bearer '+_access_token(upload['channel_id'])}
+        response=requests.get(API_URL+'/videos',params={'part':'snippet','id':upload['video_id']},headers=headers,timeout=30)
+        _check_response(response)
+        items=response.json().get('items',[])
+        if len(items)!=1 or items[0].get('id')!=upload['video_id']:
+            raise YouTubeError('The uploaded video could not be verified.')
+        source=items[0].get('snippet',{})
+        if source.get('channelId')!=upload['channel_id'] or not source.get('title') or not source.get('categoryId'):
+            raise YouTubeError('The uploaded video metadata or channel could not be verified.')
+        mutable=('title','categoryId','tags','defaultLanguage','defaultAudioLanguage')
+        snippet={key:source[key] for key in mutable if key in source}
+        snippet['description']=text
+        snippet['tags']=tags
+        response=requests.put(API_URL+'/videos',params={'part':'snippet'},json={'id':upload['video_id'],'snippet':snippet},
+            headers=headers,timeout=30)
+        _check_response(response)
+        confirmed=response.json();confirmed_tags=confirmed.get('snippet',{}).get('tags',[])
+        # Google can alphabetize tags; order is not part of keyword identity.
+        if (confirmed.get('id')!=upload['video_id'] or confirmed.get('snippet',{}).get('description')!=text
+                or len(confirmed_tags)!=len(tags) or set(confirmed_tags)!=set(tags)):
+            raise YouTubeError('YouTube did not confirm the updated description. Retry this action.')
+        meta={**upload['metadata'],'description':text,'tags':confirmed_tags,'scene_description':preview['scene_description']}
+        with database.get_connection() as c:
+            c.execute('UPDATE youtube_uploads SET metadata=? WHERE clip_id=?',(json.dumps(meta),clip_id))
+        return get_upload(clip_id)
 
 
 def queue_upload(clip_id, metadata):
@@ -268,14 +353,11 @@ def queue_upload(clip_id, metadata):
             meta['title'] = (meta.get('title') or clip['title']).strip()
             if not meta['title'] or len(meta['title']) > 100 or any(c in meta['title'] for c in '<>'):
                 raise YouTubeError('Use a title of 1–100 characters without < or >.')
-            meta['description'] = (meta.get('description') or '').strip()
-            credits = _credits(clip)
-            if credits:
-                meta['description'] += ('\n\n' if meta['description'] else '') + 'Source credits:\n' + credits
-            if len(meta['description'].encode('utf-8')) > 5000 or any(c in meta['description'] for c in '<>'):
-                raise YouTubeError('The description including source credits must fit within 5,000 bytes without < or >.')
+            preview=description_preview(clip_id,meta.get('description') or '')
+            meta.update(description=preview['description'],tags=preview['tags'],scene_description=preview['scene_description'])
             meta['privacy'] = meta.get('privacy') or connection['default_privacy']
             meta['copyright_gate']=True
+            meta['auto_release_after_copyright']=meta['privacy']!='private'
             if meta.get('made_for_kids') is None:
                 meta['made_for_kids'] = connection['default_made_for_kids']
             stat = path.stat()
@@ -355,7 +437,7 @@ def _run_upload(clip_id):
         else:
             response = requests.post(UPLOAD_URL, params={'uploadType': 'resumable', 'part': 'snippet,status'},
                 headers={**headers(), 'X-Upload-Content-Length': str(size), 'X-Upload-Content-Type': 'video/mp4'},
-                json={'snippet': {'title': meta['title'], 'description': meta['description'], 'categoryId': meta.get('category_id','22')},
+                json={'snippet': {'title': meta['title'], 'description': meta['description'], 'tags':meta.get('tags',[]),'categoryId': meta.get('category_id','22')},
                       'status': {'privacyStatus': 'private' if meta.get('copyright_gate') else meta['privacy'], 'selfDeclaredMadeForKids': meta['made_for_kids']}},
                 timeout=60, allow_redirects=False)
             _check_response(response)

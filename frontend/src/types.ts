@@ -1,4 +1,4 @@
-export type ProjectMode = 'viral' | 'ranking' | 'discovery';
+export type ProjectMode = 'viral' | 'ranking' | 'discovery' | 'movie';
 export type AIProviderType = 'auto' | 'gemini' | 'openai' | 'local';
 
 export interface Settings {
@@ -15,6 +15,8 @@ export interface Settings {
   language: string;
   hardware_accel: string;
   temp_retention_hours: number;
+  watermark_enabled: boolean;
+  watermark_text: string;
 }
 
 export interface AIStatus {
@@ -71,10 +73,11 @@ export interface YouTubeUpload {
   clip_id: string;
   status: 'QUEUED' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
   progress: number;
-  metadata: { title: string; description: string; privacy: string; made_for_kids: boolean };
+  metadata: { title: string; description: string; privacy: string; made_for_kids: boolean; tags?:string[];scene_description?:string };
   error?: string;
   url?: string;
   actual_privacy?: string;
+  video_id?: string;
 }
 
 export interface Job {

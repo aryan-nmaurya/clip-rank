@@ -43,7 +43,7 @@ def invoke(action, *args, **kwargs):
 
 class ConnectionRequest(BaseModel):
     client_document: dict[str, Any] | None = None
-    privacy: Literal['private', 'unlisted', 'public'] = 'private'
+    privacy: Literal['private', 'unlisted', 'public'] = 'public'
     made_for_kids: bool = False
 
 
@@ -70,7 +70,11 @@ def copyright_check(clip_id:str): return invoke(copyright.refresh,clip_id,force=
 
 @router.post('/copyright/{clip_id}/review',dependencies=[Depends(local_mutation)])
 def copyright_review(clip_id:str,payload:CopyrightReview):
-    return invoke(copyright.record_review,clip_id,payload.verdict,payload.note)
+    result=invoke(copyright.record_review,clip_id,payload.verdict,payload.note)
+    if payload.verdict=='passed':
+        invoke(copyright.auto_release,clip_id,force=True)
+        result=copyright.read(clip_id)
+    return result
 
 
 @router.post('/copyright/{clip_id}/publish',dependencies=[Depends(local_mutation)])
@@ -116,6 +120,16 @@ def disconnect():
 @router.get('/uploads/{clip_id}')
 def upload_status(clip_id: str):
     return youtube.get_upload(clip_id)
+
+
+@router.post('/uploads/{clip_id}/preview', dependencies=[Depends(local_mutation)])
+def upload_preview(clip_id:str,payload:UploadRequest):
+    return invoke(youtube.description_preview,clip_id,payload.description)
+
+
+@router.post('/uploads/{clip_id}/description', dependencies=[Depends(local_mutation)])
+def update_description(clip_id:str):
+    return invoke(youtube.update_uploaded_description,clip_id)
 
 
 @router.post('/uploads/{clip_id}', dependencies=[Depends(local_mutation)])

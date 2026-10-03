@@ -44,6 +44,25 @@ class ProductionDirector:
         generic={'funny','best','worst','epic','amazing','incredible','moments','fails','fail','saves','save','videos','clips','the','top','most'}
         return {w.rstrip('s') for w in tokens(topic) if len(w)>2 and w not in generic}
 
+    @classmethod
+    async def rewrite_hook(cls,provider,topic,first_moment,feedback,avoid=None):
+        original_feedback=feedback
+        for _ in range(3):
+            prompt=('Repair ONE opening hook for a real countdown. Return ONLY JSON {"hook":"..."}. '
+                'Use 2–5 words, explicitly name the requested subject, and create curiosity without inventing facts. '
+                'No greeting, CTA, guaranteed views, or specific outcome spoiler. Do not copy the other hook.\n'+
+                json.dumps({'topic':topic,'first_visible_action':first_moment['observed_action'],
+                    'feedback':feedback,'avoid_hook':avoid},ensure_ascii=False))
+            try:
+                hook=cls.validate_line(parse_object(await provider.generate_text(prompt,options={'json':True}))['hook'],5)
+                roots=cls.topical_roots(topic)
+                if roots and not roots.intersection(w.rstrip('s') for w in tokens(hook)):
+                    raise ValueError('Explicitly name the requested subject')
+                if avoid and tokens(hook)==tokens(avoid):raise ValueError('Use a different hook')
+                return hook
+            except (ValueError,TypeError,KeyError) as exc:feedback=str(exc)
+        raise ValueError('Could not repair the opening hook: '+str(original_feedback)+'. '+str(feedback))
+
     @staticmethod
     async def rank_pool(provider,name,pool,sheets,topic):
         prompt=('COMPARATIVE RANKING. Compare all these independently topic-verified events together. Each image corresponds '
@@ -74,39 +93,38 @@ class ProductionDirector:
 
     @staticmethod
     def cuts(pool, count, variant):
-        best = sorted(pool, key=lambda m: m['score'], reverse=True)
-        if variant == 'B' and len(best) > count:
-            # Preserve the best payoff but use other independently verified sources.
-            alternatives = best[count:count * 2 - 1]
-            selected = [best[0], *alternatives, *best[1:count]]
-            seen, unique = set(), []
-            for item in selected:
-                if item['source_id'] not in seen:
-                    seen.add(item['source_id']); unique.append(item)
-                if len(unique) == count:
-                    break
-        else:
-            unique = best[:count]
+        best = list({m['source_id']:m for m in sorted(pool,key=lambda m:m['score'])}.values())
+        best.sort(key=lambda m:m['score'],reverse=True)
+        if len({m['source_id'] for m in best})<count*2:
+            raise ValueError(f'Two Top {count} Shorts require {count*2} different source videos. Reusing a source between A and B is prohibited.')
+        unique=best[0 if variant=='A' else 1::2][:count]
         ordered = RankingScorer.score_and_order(unique, count)
         result = []
         for item in ordered:
             start, end = item['start'], item['end']
             if variant == 'A':
                 start = max(start, item['event_start'] - .7)
-                end = min(end, item['event_end'] + .45)
+                # Keep the entire independently verified ending/aftermath. An
+                # estimated event_end must never shorten the visible payoff.
                 # Do not rush speech or split the actual event to hit a fixed duration.
                 if end - start < 3.4:
                     start = max(item['start'], end - 3.4)
                     end = min(item['end'], max(end, start + 3.4))
-            else:
-                start=max(start,item['event_start']-1.8)
-                end=min(end,item['event_end']+.7)
             result.append({**item, 'start': round(start, 3), 'end': round(end, 3),
                            'verified_start': item['start'], 'verified_end': item['end']})
+        from app.media.production_qc import ProductionQC
+        missing=ProductionQC.MIN_DURATION-sum(m['end']-m['start'] for m in result)
+        for moment in result:
+            if missing<=0:break
+            context=min(missing,moment['start']-moment['verified_start'])
+            moment['start']-=context;missing-=context
+        ProductionQC.require_duration(round(sum(m['end']-m['start'] for m in result),3))
         return result
 
     @classmethod
-    async def plan(cls, provider, name, pool, count, topic, language='en', feedback=None):
+    async def plan(cls, provider, name, pool, count, topic, language='en', feedback=None, fixed_plans=None, failed_lines=None):
+        fixed_plans=fixed_plans or {}
+        failed_lines=failed_lines or []
         variants = {key: cls.cuts(pool, count, key) for key in ('A', 'B')}
         evidence = {key: [{**{k: m[k] for k in ('source_id','assigned_rank','start','end','event_start',
                       'payoff_time','event_end','label','observed_action','topic_evidence','score')},
@@ -135,7 +153,11 @@ class ProductionDirector:
             '{"variants":[{"name":"A","hook":"...","entries":[{"source_id":"...",'
             '"rank":5,"narration":"...","reason":"How this adds original context without spoiling"}]}]}. '
             'Include both A and B, all entries exactly once.\n' + json.dumps({'topic': topic, 'language': language,
-                'verified_cuts': evidence, 'repair_feedback': feedback}, ensure_ascii=False))
+                'verified_cuts': evidence, 'repair_feedback': feedback,'forbidden_failed_narration':failed_lines,
+                'approved_variants':{key:{'hook':value['hook'],'entries':[{'source_id':m['source_id'],
+                    'narration':m['narration_text']} for m in value['moments']]} for key,value in fixed_plans.items()}}, ensure_ascii=False))
+        if fixed_plans:
+            prompt='Keep approved variants unchanged. Repair only the other variant; its hook and every shared-source spoken line must differ from the approved variant.\n'+prompt
         raw = await provider.generate_text(prompt, options={'json': True})
         try:
             response = parse_object(raw)
@@ -147,10 +169,22 @@ class ProductionDirector:
                 key = plan['name']
                 if key not in variants or key in plans:
                     raise ValueError('Invalid variant')
-                hook = cls.validate_line(plan['hook'], 5)
-                roots=cls.topical_roots(topic)
-                if roots and not roots.intersection(w.rstrip('s') for w in tokens(hook)):
-                    raise ValueError(f'Short {key} hook must explicitly name the requested subject: {topic}')
+                if key in fixed_plans:
+                    # These plans have already passed encoded-video QC. Do not
+                    # discard them because a subsequent model response differs.
+                    plans[key]=fixed_plans[key]
+                    continue
+                try:
+                    hook = cls.validate_line(plan['hook'], 5)
+                    roots=cls.topical_roots(topic)
+                    if roots and not roots.intersection(w.rstrip('s') for w in tokens(hook)):
+                        raise ValueError(f'Short {key} hook must explicitly name the requested subject: {topic}')
+                    failed=next((f for f in failed_lines if f['variant']==key and tokens(f['text'])==tokens(hook)),None)
+                    if failed:raise ValueError('This exact hook failed speech verification: '+failed['reason'])
+                except (ValueError,KeyError) as exc:
+                    other='B' if key=='A' else 'A'
+                    avoid=plan.get('hook') if failed_lines else (fixed_plans.get(other) or plans.get(other) or {}).get('hook')
+                    hook=await cls.rewrite_hook(provider,topic,variants[key][0],str(exc),avoid)
                 if len(plan['entries']) != count:
                     raise ValueError('Incomplete countdown')
                 entries = []
@@ -161,17 +195,38 @@ class ProductionDirector:
                     try:
                         text = hook if idx==0 else cls.validate_line(script['narration'],budget)
                         if idx:cls.validate_tease(text)
+                        failed=next((f for f in failed_lines if f['variant']==key and tokens(f['text'])==tokens(text)),None)
+                        if failed:raise ValueError('This sentence failed speech verification: '+failed['reason'])
                     except ValueError as exc:
-                        avoid=next((m['narration_text'] for m in plans.get('A',{}).get('moments',[]) if m['source_id']==moment['source_id']),None)
+                        avoid=script['narration']
                         text=await cls.rewrite_tease(provider,moment,key,budget,str(exc),avoid)
                     entries.append({**moment, 'narration_text': text, 'script_reason': str(script.get('reason',''))[:500]})
+                if any(tokens(m['narration_text'])==tokens(f['text']) for m in entries for f in failed_lines if f['variant']==key):
+                    raise ValueError('A rewritten script repeats narration that failed speech verification. Use different phrasing.')
                 plans[key] = {'name': key, 'hook': hook, 'moments': entries,
                               'intent': 'Fast entertainment' if key == 'A' else 'Suspense and storytelling'}
             if tokens(plans['A']['hook']) == tokens(plans['B']['hook']):
-                raise ValueError('Duplicate hooks')
+                key='A' if 'B' in fixed_plans else 'B'
+                other='B' if key=='A' else 'A'
+                try:
+                    hook=await cls.rewrite_hook(provider,topic,plans[key]['moments'][0],'Duplicate hooks',plans[other]['hook'])
+                except ValueError as exc:raise ValueError('Duplicate hooks: '+str(exc)) from exc
+                plans[key]['hook']=hook
+                plans[key]['moments'][0]['narration_text']=hook
             by_source = {m['source_id']: tokens(m['narration_text']) for m in plans['A']['moments']}
             if any(by_source.get(m['source_id']) == tokens(m['narration_text']) for m in plans['B']['moments']):
-                raise ValueError('Duplicate narration')
+                key='A' if 'B' in fixed_plans else 'B'
+                other='B' if key=='A' else 'A'
+                other_lines={m['source_id']:m['narration_text'] for m in plans[other]['moments']}
+                for idx,moment in enumerate(plans[key]['moments']):
+                    avoid=other_lines.get(moment['source_id'])
+                    if avoid and tokens(avoid)==tokens(moment['narration_text']):
+                        if idx==0:
+                            hook=await cls.rewrite_hook(provider,topic,moment,'Duplicate narration',avoid)
+                            plans[key]['hook']=hook;moment['narration_text']=hook
+                        else:
+                            budget=min(10,max(3,math.floor((moment['end']-moment['start']-.4)*1.8)))
+                            moment['narration_text']=await cls.rewrite_tease(provider,moment,key,budget,'Duplicate narration',avoid)
             return plans
         except (ValueError, TypeError, KeyError) as exc:
             raise ValueError(f'{name} did not produce two valid, distinct production scripts: {exc}') from exc
@@ -239,21 +294,24 @@ class ProductionDirector:
             return {'passed': False, 'method': method, 'reason': 'Final multimodal review did not provide valid acceptance evidence.'}
 
     @staticmethod
-    async def plan_viral(provider,name,moment,sheet,transcript,feedback=None,force_commentary=False,contextual=False):
+    async def plan_viral(provider,name,moment,sheet,transcript,feedback=None,force_commentary=False,contextual=False,failed_lines=None):
         prompt = ('STANDALONE STORY PRODUCTION. Inspect these chronological source frames and actual word-timed speech. '
             'Select a complete standalone story with hook, essential context, tension and visible payoff. No ranking mechanics. '
             'Ignore source titles. Use only visible action and supplied speech. Do not invent motives, injuries or dialogue. '
             'Write a truthful 2–6-word title, attention hook of at most 7 words, and one short grounded narration of '
             'at most 12 words for a silent/no-dialogue source only. If actual speech exists preserve it instead of competing '
             'with it. Remove filler/long dead air only when it preserves meaning and visible payoff. '
+            'The FINISHED edit must exceed 10 seconds (minimum 10.1 seconds of real footage). Never loop or pad it. '
             'Return ordered non-overlapping source cuts inside the supplied window; each >=.6 seconds, max 8 cuts. '
             'Do not cut midword. Prefer a continuous cut for action. A dialogue edit may trim long pauses but retain '
             'conversational rhythm. Return ONLY JSON: {"complete_story":true,"confidence":.95,"title":"...",'
             '"hook":"...","narration":"...","observed_action":"...","cuts":[{"start":0,"end":8}]}.\n'+
             json.dumps({'window':{'start':moment['start'],'end':moment['end']},'actual_speech':transcript,
-                        'repair_feedback':feedback},ensure_ascii=False))
+                        'repair_feedback':feedback,'forbidden_failed_narration':failed_lines or []},ensure_ascii=False))
         if force_commentary:
-            prompt+='\nORIGINAL COMMENTARY REQUIRED even when source dialogue exists. Write one grounded spoken observation of at most 12 words, adding curiosity without spoiling the visible payoff. Preserve useful source sounds after narration. '+('Explain a visible detail that helps understand the outcome; no invented context.' if contextual else '')
+            prompt+='\nORIGINAL COMMENTARY REQUIRED even when source dialogue exists. Write one grounded spoken observation of 5–12 words, adding curiosity without spoiling the visible payoff. Preserve useful source sounds after narration. '+('Explain a visible detail that helps understand the outcome; no invented context.' if contextual else '')
+        if not transcript or force_commentary:
+            prompt+='\nReturn EXACTLY ONE continuous source cut longer than 10 seconds (at least 10.1 seconds), retaining the complete attempt and aftermath. Do not split it into multiple cuts and do not repeat the narration. If this window cannot support that, set complete_story=false.'
         raw = await provider.analyze_images([sheet],prompt,options={'json':True})
         try:
             plan = parse_object(raw)
@@ -263,6 +321,10 @@ class ProductionDirector:
             plan['hook'] = ProductionDirector.validate_line(plan['hook'],7)
             if not transcript or force_commentary:
                 plan['narration'] = ProductionDirector.validate_line(plan['narration'],12)
+                if any(tokens(plan['narration'])==tokens(line) for line in failed_lines or []):
+                    raise ValueError('Rewrite the narration with different spoken wording; this exact sentence already failed speech verification.')
+                if force_commentary and len(plan['narration'].split())<5:
+                    raise ValueError('Original commentary needs at least five grounded words to meet production quality.')
             if not isinstance(plan.get('observed_action'),str) or not plan['observed_action'].strip():
                 raise ValueError('Missing visible story evidence')
             if not isinstance(plan['cuts'],list) or not 1<=len(plan['cuts'])<=8:
@@ -278,6 +340,8 @@ class ProductionDirector:
                 if any(lo+.04<t<hi-.04 for lo,hi in word_edges for t in (start,end)):
                     raise ValueError('A cut interrupts source speech midword')
                 previous=end
+            from app.media.production_qc import ProductionQC
+            ProductionQC.require_duration(sum(c['end']-c['start'] for c in plan['cuts']))
             return plan
         except (ValueError,TypeError,KeyError) as exc:
             raise ValueError(f'{name} did not produce a verified standalone edit: {exc}') from exc

@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar';
 import { HomePage } from './pages/HomePage';
 import { ViralPage } from './pages/ViralPage';
 import { RankingPage } from './pages/RankingPage';
+import { MoviePage } from './pages/MoviePage';
 import { JobProgressPage } from './pages/JobProgressPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -13,7 +14,7 @@ import { AIStatus } from './types';
 import { getAIStatus } from './api';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'discovery' | 'autopilot' | 'progress' | 'library' | 'settings'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'progress' | 'library' | 'settings'>('home');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
@@ -72,6 +73,7 @@ export function App() {
           <RankingPage onStartJob={handleStartJob} aiStatus={aiStatus} onOpenSettings={() => setCurrentTab('settings')} />
         )}
         {currentTab==='discovery'&&<DiscoveryPage onStartJob={handleStartJob}/>}
+        {currentTab==='movie'&&<MoviePage onStartJob={handleStartJob}/>}
         {currentTab==='autopilot'&&<AutopilotPage onOpenProject={handleOpenProject} onSettings={()=>setCurrentTab('settings')}/>}
 
         {currentTab === 'progress' && activeProjectId && activeJobId && (
@@ -79,6 +81,7 @@ export function App() {
             projectId={activeProjectId}
             jobId={activeJobId}
             onNavigateBack={() => setCurrentTab('library')}
+            onTryMovieSource={() => setCurrentTab('movie')}
           />
         )}
 

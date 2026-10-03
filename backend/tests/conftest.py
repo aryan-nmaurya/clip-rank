@@ -31,6 +31,7 @@ def isolated_app(tmp_path, monkeypatch):
     from app.pipelines.ranking import ranking_pipeline
     from app.pipelines.viral import viral_pipeline
     from app.api import routes
+    from app.publishing import youtube
     outputs = tmp_path / "output"
     viral = outputs / "viral"
     ranking = outputs / "ranking"
@@ -39,6 +40,7 @@ def isolated_app(tmp_path, monkeypatch):
     for folder in (viral, ranking, temp, projects):
         folder.mkdir(parents=True)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(youtube, "AUTH_FILE", tmp_path / "youtube_connection.json")
     monkeypatch.setattr(config,"STORAGE_DIR",tmp_path)
     monkeypatch.setattr(config,"OUTPUT_STORAGE_DIR",outputs)
     monkeypatch.setattr(manager, "TEMP_STORAGE_DIR", temp)
@@ -50,6 +52,18 @@ def isolated_app(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "TEMP_STORAGE_DIR", temp)
     database.init_db()
     return {"root": tmp_path, "viral": viral, "ranking": ranking, "temp": temp, "projects": projects}
+
+
+@pytest.fixture
+def rendered_watermarks(monkeypatch):
+    from app.media.watermark import Watermark
+    rendered=[]
+    original=Watermark.render
+    def render(path,width,height,text):
+        rendered.append(text)
+        return original(path,width,height,text)
+    monkeypatch.setattr(Watermark,'render',render)
+    return rendered
 
 
 @pytest.fixture
@@ -83,6 +97,7 @@ def ranking_vision(monkeypatch):
         return {'duration':duration,'text':text,'words':words,
                 'segments':[{'start':0,'end':words[-1]['end'],'text':text,'words':words}]}
     monkeypatch.setattr(TTSEngine,'synthesize_timed',fake_timed)
+    monkeypatch.setattr(TTSEngine,'validate_ready',TTSEngine.resolve_voice)
     monkeypatch.setattr(Transcriber,'transcribe',lambda _: {'available':True,'segments':[],'text':''})
     class Provider:
         async def generate_text(self,prompt,**kwargs):
@@ -97,12 +112,15 @@ def ranking_vision(monkeypatch):
                     'reason':'Explicit fixture narration'} for i,m in enumerate(cuts)]})
             return json.dumps({'variants':plans})
         async def analyze_images(self, images, prompt, **kwargs):
+            if prompt.startswith('BLIND SOURCE EVENT REVIEW'):
+                return json.dumps({'observed_action':'Colored patterns visibly move throughout the complete test window.',
+                    'outcome':'successful','complete_action':True,'confidence':.99,'reason':'Explicit moving-pattern fixture, no physical failure claimed.'})
             if prompt.startswith('COMPARATIVE RANKING'):
                 evidence=json.loads(prompt.split('\n')[1])
                 return json.dumps({'rankings':[{'id':m['id'],'score':100-m['id'],
                     'reason':'Explicit comparative fixture: the earlier indexed moving pattern has the strongest test payoff.'} for m in evidence['candidates']]})
             if prompt.startswith('STANDALONE STORY'):
-                evidence=json.loads(prompt.split('\n')[-1])
+                evidence=json.loads(next(line for line in prompt.splitlines() if line.startswith('{"window"')))
                 return json.dumps({'complete_story':True,'confidence':.99,'title':'Moving colored shapes',
                     'hook':'Watch the colors change','narration':'Colored shapes move across the screen',
                     'observed_action':'Colored shapes move','cuts':[evidence['window']]})
@@ -129,3 +147,26 @@ def ranking_vision(monkeypatch):
     async def connected(*args, **kwargs): return provider,'fixture'
     monkeypatch.setattr(AIRouter,'get_active_provider',connected)
     return provider
+
+
+@pytest.fixture
+def ranking_footage(tmp_path):
+    from app.core.runtime import run_process
+    paths=[]
+    for i in range(6):
+        path=tmp_path/f"raw_source_{i}.mp4"
+        run_process(['ffmpeg','-v','error','-y','-f','lavfi','-i',f'testsrc2=size={640+i*16}x360:rate=15:duration=6',
+            '-f','lavfi','-i',f'sine=frequency={300+i*100}:duration=6','-c:v','libx264','-preset','ultrafast',
+            '-pix_fmt','yuv420p','-c:a','aac','-shortest',str(path)])
+        paths.append(path)
+    return paths
+
+
+@pytest.fixture
+def long_footage(tmp_path):
+    from app.core.runtime import run_process
+    path=tmp_path/'long_source.mp4'
+    run_process(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=640x360:rate=15:duration=24',
+        '-f','lavfi','-i','sine=frequency=300:duration=24','-c:v','libx264','-preset','ultrafast',
+        '-pix_fmt','yuv420p','-c:a','aac','-shortest',str(path)])
+    return [path]

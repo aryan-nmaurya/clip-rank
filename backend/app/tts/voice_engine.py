@@ -22,6 +22,24 @@ LEGACY_VOICES = {"Samantha": "en-US-AriaNeural", "Ava": "en-US-AriaNeural",
 
 
 class TTSEngine:
+    @classmethod
+    def validate_ready(cls, voice=None):
+        """Check the installed connection without rejecting a job on a test utterance.
+
+        Real narration is synthesized and independently caption-checked in the
+        production retry loop. A three-word ASR probe is not a connection test.
+        """
+        import importlib.util
+        voice = cls.resolve_voice(voice)
+        if voice.startswith('pocket:'):
+            from app.tts.pocket import PocketTTS
+            status = PocketTTS.status()
+            if not status['ready']:
+                raise ValueError(status['message'])
+        elif importlib.util.find_spec('edge_tts') is None:
+            raise ValueError('Install backend requirements to enable neural narration.')
+        return voice
+
     @staticmethod
     def resolve_voice(voice):
         voice = LEGACY_VOICES.get(voice, voice) or DEFAULT_VOICE

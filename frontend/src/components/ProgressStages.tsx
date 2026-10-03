@@ -2,37 +2,51 @@ import React from 'react';
 import { Check, Circle } from 'lucide-react';
 
 interface ProgressStagesProps {
-  mode: 'viral' | 'ranking' | 'discovery';
+  mode: 'viral' | 'ranking' | 'discovery' | 'movie';
   status: string;
   progress: number;
+  format?: string;
 }
 
 interface StageItem {
   id: string;
   label: string;
   backendStatuses: string[];
+  minimumProgress?: number;
 }
 
 const RANKING_STAGES: StageItem[] = [
-  { id: 'topic', label: 'Understanding topic', backendStatuses: ['INGESTING'] },
-  { id: 'sources', label: 'Finding candidate videos', backendStatuses: ['INGESTING'] },
-  { id: 'analysis', label: 'Analyzing videos', backendStatuses: ['ANALYZING'] },
-  { id: 'moments', label: 'Finding best moments', backendStatuses: ['ANALYZING'] },
-  { id: 'ranking', label: 'Ranking moments', backendStatuses: ['RANKING'] },
-  { id: 'editing', label: 'Editing & Rendering', backendStatuses: ['EDITING', 'RENDERING'] },
-  { id: 'cleanup', label: 'Cleaning temporary files', backendStatuses: ['CLEANING'] },
+  { id: 'connections', label: 'Checking vision and natural voice', backendStatuses: ['ANALYZING'], minimumProgress: 4 },
+  { id: 'sources', label: 'Finding raw candidate videos', backendStatuses: ['INGESTING'], minimumProgress: 9 },
+  { id: 'analysis', label: 'Verifying footage and best moments', backendStatuses: ['ANALYZING'], minimumProgress: 20 },
+  { id: 'ranking', label: 'Ranking verified payoffs', backendStatuses: ['RANKING'], minimumProgress: 53 },
+  { id: 'writing', label: 'Writing distinct A/B stories', backendStatuses: ['SCRIPTING'], minimumProgress: 55 },
+  { id: 'voice', label: 'Generating narration and captions', backendStatuses: ['GENERATING_VOICE'], minimumProgress: 60 },
+  { id: 'editing', label: 'Editing and mixing audio', backendStatuses: ['EDITING', 'RENDERING'], minimumProgress: 82 },
+  { id: 'review', label: 'Reviewing the finished videos', backendStatuses: ['ANALYZING'], minimumProgress: 89 },
+  { id: 'cleanup', label: 'Cleaning temporary files', backendStatuses: ['CLEANING'], minimumProgress: 98 },
 ];
 
 const VIRAL_STAGES: StageItem[] = [
-  { id: 'ingest', label: 'Ingesting source video', backendStatuses: ['INGESTING'] },
-  { id: 'transcribe', label: 'Transcribing speech & audio', backendStatuses: ['TRANSCRIBING'] },
-  { id: 'detect', label: 'Detecting viral moments', backendStatuses: ['ANALYZING'] },
-  { id: 'score', label: 'Scoring viral potential', backendStatuses: ['ANALYZING'] },
-  { id: 'reframe', label: 'Reframing 9:16 vertical', backendStatuses: ['EDITING'] },
-  { id: 'captions', label: 'Adding dynamic captions', backendStatuses: ['EDITING', 'RENDERING'] },
-  { id: 'cleanup', label: 'Cleaning temporary files', backendStatuses: ['CLEANING'] },
+  { id: 'ingest', label: 'Ingesting source video', backendStatuses: ['INGESTING'], minimumProgress: 10 },
+  { id: 'transcribe', label: 'Transcribing speech & audio', backendStatuses: ['TRANSCRIBING'], minimumProgress: 25 },
+  { id: 'detect', label: 'Finding complete stories', backendStatuses: ['ANALYZING'], minimumProgress: 42 },
+  { id: 'writing', label: 'Writing a grounded hook', backendStatuses: ['SCRIPTING'], minimumProgress: 50 },
+  { id: 'voice', label: 'Generating narration and captions', backendStatuses: ['GENERATING_VOICE'], minimumProgress: 57 },
+  { id: 'reframe', label: 'Reframing 9:16 vertical', backendStatuses: ['EDITING'], minimumProgress: 66 },
+  { id: 'mix', label: 'Rendering and mixing audio', backendStatuses: ['RENDERING'], minimumProgress: 77 },
+  { id: 'review', label: 'Reviewing the finished Short', backendStatuses: ['QC'], minimumProgress: 86 },
+  { id: 'cleanup', label: 'Cleaning temporary files', backendStatuses: ['CLEANING'], minimumProgress: 98 },
 ];
-const DISCOVERY_STAGES:StageItem[]=[
+const MOVIE_STAGES:StageItem[]=[
+  {id:'analyze',label:'Analyzing video',backendStatuses:['INGESTING','TRANSCRIBING'],minimumProgress:8},
+  {id:'moments',label:'Finding strong moments',backendStatuses:['ANALYZING'],minimumProgress:32},
+  {id:'styles',label:'Choosing best styles',backendStatuses:['ANALYZING'],minimumProgress:55},
+  {id:'create',label:'Creating clips',backendStatuses:['GENERATING_VOICE','EDITING','RENDERING'],minimumProgress:60},
+  {id:'review',label:'Final quality check',backendStatuses:['QC'],minimumProgress:86},
+  {id:'ready',label:'Ready',backendStatuses:['CLEANING'],minimumProgress:98},
+];
+const LEGACY_DISCOVERY_STAGES:StageItem[]=[
   {id:'research',label:'Researching primary sources',backendStatuses:['RESEARCHING']},
   {id:'writing',label:'Writing and fact-checking',backendStatuses:['SCRIPTING']},
   {id:'voice',label:'Generating natural narration',backendStatuses:['VOICE']},
@@ -40,12 +54,29 @@ const DISCOVERY_STAGES:StageItem[]=[
   {id:'render',label:'Rendering finished video',backendStatuses:['RENDERING']},
   {id:'qc',label:'Reviewing the final video',backendStatuses:['QC']},
 ];
+const DISCOVERY_STAGES:StageItem[]=[
+  {id:'source',label:'Loading verified footage',backendStatuses:['INGESTING']},
+  {id:'speech',label:'Timing source speech',backendStatuses:['TRANSCRIBING']},
+  {id:'story',label:'Planning the visible story',backendStatuses:['ANALYZING','SCRIPTING','RANKING']},
+  {id:'voice',label:'Recording original commentary',backendStatuses:['GENERATING_VOICE','VOICE']},
+  {id:'edit',label:'Editing footage and captions',backendStatuses:['EDITING']},
+  {id:'render',label:'Rendering and mixing audio',backendStatuses:['RENDERING']},
+  {id:'qc',label:'Checking the finished video',backendStatuses:['QC']},
+  {id:'cleanup',label:'Removing temporary files',backendStatuses:['CLEANING']},
+];
 
-export const ProgressStages: React.FC<ProgressStagesProps> = ({ mode, status, progress }) => {
-  const stages = mode === 'discovery' ? DISCOVERY_STAGES : mode === 'viral' ? VIRAL_STAGES : RANKING_STAGES;
+export const ProgressStages: React.FC<ProgressStagesProps> = ({ mode, status, progress, format }) => {
+  const stages = mode === 'movie' ? MOVIE_STAGES : mode === 'discovery' ? (format==='explainer'?LEGACY_DISCOVERY_STAGES:DISCOVERY_STAGES) : mode === 'viral' ? VIRAL_STAGES : RANKING_STAGES;
 
   const getStageStatus = (stage: StageItem, index: number) => {
     if (status === 'COMPLETED') return 'completed';
+    if (mode === 'ranking' || mode === 'movie' || mode === 'viral') {
+      const activeStage = mode === 'viral' ? stages.findIndex(item => item.backendStatuses.includes(status)) : -1;
+      const current = activeStage >= 0 ? activeStage : stages.reduce((last, item, i) => progress >= (item.minimumProgress ?? 100) ? i : last, -1);
+      if (index < current) return 'completed';
+      if (index === current) return status === 'FAILED' || status === 'CANCELLED' ? 'failed' : 'active';
+      return 'pending';
+    }
     if (status === 'FAILED' || status === 'CANCELLED') return 'failed';
 
     const current = stages.findIndex(s => s.backendStatuses.includes(status));

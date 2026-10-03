@@ -61,7 +61,9 @@ class ContentDirector:
     def eligible(cls,item,profile=None):
         from app.studio.policy import RightsPolicyEngine
         profile=profile or store.profile()
-        return item.get('moment_verified') is True and RightsPolicyEngine.evaluate(cls.assets(item,profile),profile.rights_policy)['passed']
+        physical=(item.get('opportunity_type')!='visual_moment' or
+                  (item.get('real_world_action') is True and item.get('topic_matches') is True))
+        return physical and item.get('moment_verified') is True and RightsPolicyEngine.evaluate(cls.assets(item,profile),profile.rights_policy)['passed']
 
     @classmethod
     def qualified(cls,item,profile=None):
@@ -80,7 +82,7 @@ class ContentDirector:
         if min(d['hook_strength'],d['visual_payoff'])>=92 and not item.get('context_needed'): return 'viral_clip'
         related=[other for other in items if other.get('verified_topic')==item.get('verified_topic')
                  and other['category']==item['category'] and cls.qualified(other)]
-        if len({other['source_url'] for other in related})>=5:
+        if len({other['source_url'] for other in related})>=10:
             return 'ranking'
         return 'commentary' if item.get('context_needed') else 'viral_clip'
 
@@ -93,6 +95,7 @@ class ContentDirector:
             if item['category'] not in store.profile().pillars: continue
             if item['id'] in seen or item['topic'].casefold() in recent: continue
             seen.add(item['id'])
+            if item.get('opportunity_type')=='visual_moment' and not cls.eligible(item): continue
             dimensions=item['dimensions']
             weights=cls.WEIGHTS if item.get('moment') else cls.LEGACY_WEIGHTS
             if item.get('moment') and (item.get('moment_verified') is not True or item.get('one_second_interest') is not True or dimensions.get('clarity',0)<75): continue
@@ -102,7 +105,8 @@ class ContentDirector:
             score+=memory['performance_patterns'].get(item['category'],{}).get('priority_adjustment',0)
             count=memory['content_pillar_distribution'].get(item['category'],0)
             score-=min(8,count*1.5)
-            output.append({**item,'priority':round(max(0,min(100,score)),1)})
+            output.append({**item,'priority':round(max(0,min(100,score)),1),
+                           'production_ready':cls.qualified(item) if item.get('moment') else False})
         return sorted(output,key=lambda item:(-item['priority'],item['id']))
 
     @classmethod

@@ -107,6 +107,7 @@ def init_db():
             );
         """)
         conn.execute('CREATE TABLE IF NOT EXISTS copyright_checks (clip_id TEXT PRIMARY KEY, data TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS movie_music (id TEXT PRIMARY KEY, data TEXT NOT NULL)')
 
         row = conn.execute("SELECT id FROM settings WHERE id = 1").fetchone()
         if not row:
@@ -131,6 +132,11 @@ def init_db():
                 TEMP_RETENTION_HOURS,
                 now,
             ))
+        # Existing installations receive optional, disabled-by-default branding.
+        columns={r['name'] for r in conn.execute('PRAGMA table_info(settings)')}
+        for name,definition in (('watermark_enabled','INTEGER NOT NULL DEFAULT 0'),
+                                ('watermark_text',"TEXT NOT NULL DEFAULT ''")):
+            if name not in columns:conn.execute(f'ALTER TABLE settings ADD COLUMN {name} {definition}')
         # Migrate prior system-voice choices to their closest neural voice.
         from app.tts.voice_engine import LEGACY_VOICES
         for legacy, neural in LEGACY_VOICES.items():
@@ -144,6 +150,7 @@ def get_settings() -> Dict[str, Any]:
     row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
     conn.close()
     result=dict(row) if row else {}
+    result['watermark_enabled']=bool(result.get('watermark_enabled',False))
     for name in ('gemini_api_key','openai_api_key'):
         if result.get(name)==f'keychain:{name}':
             from app.core.secrets import SecretVault
@@ -152,10 +159,19 @@ def get_settings() -> Dict[str, Any]:
 
 def update_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
     conn = get_connection()
+    if 'watermark_enabled' in updates or 'watermark_text' in updates:
+        from app.media.watermark import Watermark
+        existing=conn.execute('SELECT watermark_enabled,watermark_text FROM settings WHERE id=1').fetchone()
+        try:
+            enabled,text=Watermark.validate(updates.get('watermark_enabled',existing['watermark_enabled']),
+                                            updates.get('watermark_text',existing['watermark_text']))
+        except ValueError:
+            conn.close();raise
+        updates={**updates,'watermark_enabled':enabled,'watermark_text':text}
     allowed_fields = [
         "ai_provider", "gemini_api_key", "gemini_model", "openai_api_key",
         "openai_model", "local_endpoint", "local_model", "default_voice",
-        "language", "hardware_accel", "temp_retention_hours"
+        "language", "hardware_accel", "temp_retention_hours", "watermark_enabled", "watermark_text"
     ]
     fields = []
     values = []

@@ -1,7 +1,7 @@
 from typing import Literal, Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
-ProjectMode = Literal["viral", "ranking", "discovery"]
+ProjectMode = Literal["viral", "ranking", "discovery", "movie"]
 
 JobStatus = Literal[
     "QUEUED",

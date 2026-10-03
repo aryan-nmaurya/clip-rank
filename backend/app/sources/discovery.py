@@ -22,7 +22,7 @@ class SourceDiscovery:
         base = " ".join(base.split())
         individual = re.sub(r'\bfails\b','fail',base,flags=re.I)
         individual = re.sub(r'\bsaves\b','save',individual,flags=re.I)
-        return list(dict.fromkeys([individual, f"{base} caught on camera"]))
+        return list(dict.fromkeys([individual, f"{individual} original clip", f"{individual} single attempt", f"{base} caught on camera"]))
 
     @staticmethod
     def parse_search_page(html):
@@ -74,7 +74,7 @@ class SourceDiscovery:
     @classmethod
     def discover_candidate_videos(cls, topic: str, count: int, temp_dir: Path,
                                   source_urls=None, source_files=None, source_titles=None,
-                                  source_platforms=None, rejections=None) -> List[Dict[str, Any]]:
+                                  source_platforms=None, rejections=None, min_candidates=None, used_keys=None, source_provenance=None) -> List[Dict[str, Any]]:
         candidates = []
         failures = []
         entries = []
@@ -87,8 +87,10 @@ class SourceDiscovery:
             info = SourceIngestion.verify(source)
             with source.open("rb") as source_handle:
                 source_hash = hashlib.file_digest(source_handle, "sha256").hexdigest()
-            entries.append({"file_path": str(source), "title": source_titles[file_idx] if source_titles and file_idx < len(source_titles) else source.stem, "source_id": source_hash,
-                            "duration": info["duration"], "url": None, "view_count": 0, "like_count": 0})
+            original=(source_provenance or {}).get(str(source),{})
+            entries.append({**original,"file_path": str(source), "title": source_titles[file_idx] if source_titles and file_idx < len(source_titles) else original.get('title') or source.stem,
+                            "source_id":original.get('source_id') or source_hash,"source_sha256":source_hash,
+                            "duration": info["duration"], "url": original.get('url'), "view_count": original.get('view_count',0), "like_count":original.get('like_count',0)})
         for url in source_urls or []:
             entries.append({"url": url})
         if not supplied:
@@ -98,25 +100,25 @@ class SourceDiscovery:
             groups = []
             queries = cls.generate_search_queries(topic)
             for platform in dict.fromkeys(platforms):
-                group = []
+                query_groups = []
                 for query in (queries if platform == "youtube" else queries[:1]):
                     check_cancelled()
                     try:
                         found = cls.search_public_shorts(query) if platform == "youtube" else WebVideoSearch.search(query, platform)
+                        query_groups.append([])
                         for entry in found:
                             reason = RankingSourcePolicy.metadata_reason(entry)
                             if reason:
                                 rejections.append({"url": entry["url"], "title": entry.get("title"), "reason": reason})
                             else:
-                                group.append({**entry, "platform": platform})
+                                query_groups[-1].append({**entry, "platform": platform})
                     except InterruptedError:
                         raise
                     except Exception as exc:
                         check_cancelled()
                         warnings.append(f"{platform.title()} search: {str(exc)[-250:]}")
-                    if len(group) >= MAX_SEARCH_RESULTS:
-                        break
-                groups.append(group)
+                # Mix queries as well as sites so one popular repost cluster cannot consume the budget.
+                groups.extend(query_groups)
             # Interleave platforms so YouTube cannot consume the whole download budget.
             seen = set()
             for row in zip_longest(*groups):
@@ -130,9 +132,13 @@ class SourceDiscovery:
         seen_content = set()
         for idx, entry in enumerate(entries[:MAX_SEARCH_RESULTS]):
             check_cancelled()
-            if len(candidates) >= min(MAX_SOURCE_VIDEOS, count * 2 + 4):
+            if len(candidates) >= (MAX_SOURCE_VIDEOS if min_candidates else min(MAX_SOURCE_VIDEOS,count*2+4)):
                 break
             try:
+                from app.sources.reuse import source_keys
+                if used_keys and source_keys(entry).intersection(used_keys):
+                    rejections.append({'url':entry.get('url'),'title':entry.get('title'),'reason':'Already used in an approved Short.'})
+                    continue
                 reason = RankingSourcePolicy.metadata_reason(entry)
                 if reason:
                     rejections.append({"url": entry.get("url"), "title": entry.get("title"), "reason": reason})
@@ -150,6 +156,10 @@ class SourceDiscovery:
                 info = SourceIngestion.verify(path)
                 with path.open("rb") as handle:
                     fingerprint = hashlib.file_digest(handle, "sha256").hexdigest()
+                metadata['source_sha256']=fingerprint
+                if used_keys and source_keys(metadata).intersection(used_keys):
+                    rejections.append({'url':metadata.get('url'),'title':metadata.get('title'),'reason':'This footage was already used in another approved Short.'})
+                    continue
                 if fingerprint in seen_content:
                     rejections.append({"url": metadata.get("url"), "title": metadata.get("title"), "reason": "Duplicate source footage."})
                     continue
@@ -164,7 +174,9 @@ class SourceDiscovery:
                 failures.append(str(exc))
         if failures:
             warnings.append(f"Skipped {len(failures)} unavailable source videos while finding footage.")
-        if len(candidates) < count:
+        required=min_candidates or count
+        if len(candidates) < required:
             detail = failures[-1] if failures else "Too few matching individual videos were found."
-            raise ValueError(f"Found {len(candidates)} usable sources; Top {count} needs {count} distinct videos. Excluded {len(rejections)} ranking/duplicate sources. Add raw source URLs/uploads or choose a smaller count. {detail}")
+            raise ValueError(f"Found {len(candidates)} usable sources; this production needs {required} distinct unused videos. Excluded {len(rejections)} ranking/duplicate sources. Add raw source URLs/uploads or choose a smaller count. {detail}")
+        (temp_dir/'source_manifest.json').write_text(json.dumps(candidates,ensure_ascii=False,default=str))
         return candidates
