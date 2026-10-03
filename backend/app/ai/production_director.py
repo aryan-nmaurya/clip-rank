@@ -13,6 +13,9 @@ def tokens(text):
 class ProductionDirector:
     @staticmethod
     def validate_tease(text):
+        from app.core import qc
+        if not qc.enabled():
+            return text
         if re.search(r'\b(?:witness|observe|blunders?|looms?)\b|here we see|at number \w+ we have',text,re.I):
             raise ValueError('Use conversational language instead of a formal announcer.')
         if re.search(r'\b(?:falls?|fails?|misses?|slips?|crash(?:es)?|injur(?:y|ies|ed)|miscalculates?|los(?:e|es|ing)\b[^.?!]*\bgrip|hit(?:s|ting)?\b[^.?!]*\b(?:rail|concrete)|ends? (?:in|with)|lands? in|lacks? the distance|too (?:wide|short))\b',text,re.I):
@@ -92,12 +95,14 @@ class ProductionDirector:
         raise ValueError(f'{name} could not establish an evidence-based comparative ranking: {feedback}')
 
     @staticmethod
-    def cuts(pool, count, variant):
+    def cuts(pool, count, variant, variants=2):
         best = list({m['source_id']:m for m in sorted(pool,key=lambda m:m['score'])}.values())
         best.sort(key=lambda m:m['score'],reverse=True)
-        if len({m['source_id'] for m in best})<count*2:
-            raise ValueError(f'Two Top {count} Shorts require {count*2} different source videos. Reusing a source between A and B is prohibited.')
-        unique=best[0 if variant=='A' else 1::2][:count]
+        needed=count*variants
+        if len({m['source_id'] for m in best})<needed:
+            raise ValueError(f'{"Two Top "+str(count)+" Shorts require" if variants==2 else "A Top "+str(count)+" Short requires"} {needed} different source videos. Reusing a source between A and B is prohibited.')
+        # One Short takes the strongest sources outright; a pair alternates so both stay strong.
+        unique=best[:count] if variants==1 else best[0 if variant=='A' else 1::2][:count]
         ordered = RankingScorer.score_and_order(unique, count)
         result = []
         for item in ordered:
@@ -113,7 +118,7 @@ class ProductionDirector:
             result.append({**item, 'start': round(start, 3), 'end': round(end, 3),
                            'verified_start': item['start'], 'verified_end': item['end']})
         from app.media.production_qc import ProductionQC
-        missing=ProductionQC.MIN_DURATION-sum(m['end']-m['start'] for m in result)
+        missing=ProductionQC.min_duration()-sum(m['end']-m['start'] for m in result)
         for moment in result:
             if missing<=0:break
             context=min(missing,moment['start']-moment['verified_start'])
@@ -122,18 +127,19 @@ class ProductionDirector:
         return result
 
     @classmethod
-    async def plan(cls, provider, name, pool, count, topic, language='en', feedback=None, fixed_plans=None, failed_lines=None):
+    async def plan(cls, provider, name, pool, count, topic, language='en', feedback=None, fixed_plans=None, failed_lines=None, variant_count=2):
         fixed_plans=fixed_plans or {}
         failed_lines=failed_lines or []
-        variants = {key: cls.cuts(pool, count, key) for key in ('A', 'B')}
+        keys = ('A','B')[:variant_count]
+        variants = {key: cls.cuts(pool, count, key, variant_count) for key in keys}
         evidence = {key: [{**{k: m[k] for k in ('source_id','assigned_rank','start','end','event_start',
                       'payoff_time','event_end','label','observed_action','topic_evidence','score')},
                       'max_narration_words':5 if idx==0 else min(10,max(3,math.floor((m['end']-m['start']-.4)*1.8)))}
                     for idx,m in enumerate(values)]
                     for key, values in variants.items()}
         prompt = (
-            'You are ClipRank\'s final production director. Write two finished, distinct ranking narratives '
-            'using ONLY the verified visible events below. A is fast entertainment; B is suspense and storytelling. '
+            'You are ClipRank\'s final production director. Write '+('two finished, distinct ranking narratives' if variant_count==2 else 'one finished ranking narrative')+' '
+            'using ONLY the verified visible events below. '+('A is fast entertainment; B is suspense and storytelling. ' if variant_count==2 else 'A is fast, escalating entertainment with open loops that pay off at #1. ')+(
             'No greetings, introductions, requests to like/subscribe, view/revenue promises, invented injuries, '
             'emotions or invisible actions. Never reveal a fall/miss/outcome before its visible payoff. '
             'Use specific visible setup details to invite attention, natural varied curiosity bridges and escalation. '
@@ -151,8 +157,7 @@ class ProductionDirector:
             'lines for every shared source. Keep the supplied rank/source sequence unchanged. '
             'Every second should add context, anticipation or payoff. No outro padding. Return ONLY JSON: '
             '{"variants":[{"name":"A","hook":"...","entries":[{"source_id":"...",'
-            '"rank":5,"narration":"...","reason":"How this adds original context without spoiling"}]}]}. '
-            'Include both A and B, all entries exactly once.\n' + json.dumps({'topic': topic, 'language': language,
+            '"rank":5,"narration":"...","reason":"How this adds original context without spoiling"}]}]}. ')+('Include both A and B, all entries exactly once.' if variant_count==2 else 'Include only variant A, all entries exactly once.')+'\n' + json.dumps({'topic': topic, 'language': language,
                 'verified_cuts': evidence, 'repair_feedback': feedback,'forbidden_failed_narration':failed_lines,
                 'approved_variants':{key:{'hook':value['hook'],'entries':[{'source_id':m['source_id'],
                     'narration':m['narration_text']} for m in value['moments']]} for key,value in fixed_plans.items()}}, ensure_ascii=False))
@@ -162,8 +167,8 @@ class ProductionDirector:
         try:
             response = parse_object(raw)
             provider.last_production_response = response
-            if len(response['variants']) != 2:
-                raise ValueError('Two variants required')
+            if len(response['variants']) != variant_count:
+                raise ValueError(f'{variant_count} variant(s) required')
             plans = {}
             for plan in response['variants']:
                 key = plan['name']
@@ -205,6 +210,8 @@ class ProductionDirector:
                     raise ValueError('A rewritten script repeats narration that failed speech verification. Use different phrasing.')
                 plans[key] = {'name': key, 'hook': hook, 'moments': entries,
                               'intent': 'Fast entertainment' if key == 'A' else 'Suspense and storytelling'}
+            if variant_count==1:
+                return plans
             if tokens(plans['A']['hook']) == tokens(plans['B']['hook']):
                 key='A' if 'B' in fixed_plans else 'B'
                 other='B' if key=='A' else 'A'
@@ -240,7 +247,12 @@ class ProductionDirector:
         return value.strip()
 
     @staticmethod
-    async def final_review(provider, name, video_path, sheets, topic, timeline, feedback=None, mode='ranking'):
+    async def final_review(provider, name, video_path, sheets, topic, timeline, feedback=None, mode='ranking', level=None, visuals_only=False):
+        from app.studio.strictness import LEVELS, CRITICAL_FINAL_CHECKS
+        from app.core import qc
+        if not qc.enabled():
+            return {'passed': True, 'skipped': True, 'method': 'quality control off', 'reason': 'Quality control is off: the finished video was not reviewed.'}
+        level = level or LEVELS['strict']
         prompt = (
             'FINAL RENDER QUALITY REVIEW. Inspect the actual rendered video/images, not just the planned edit. '
             'When video is supplied LISTEN to the finished audio and check its narration against the visible events. '
@@ -261,6 +273,8 @@ class ProductionDirector:
             '"observations":[{"rank":5,"time":1.2,"visible_event":"Describe the specific visible action"}],'
             '"issues":[],"repair":"Specific feasible correction if rejected"}.\n' + json.dumps({
             'topic': topic, 'timeline': timeline, 'previous_feedback': feedback, 'mode':mode}, ensure_ascii=False))
+        if visuals_only:
+            prompt += '\nThis Short is INTENTIONALLY visuals-only: a headline, sad background music, no speech, no captions, no narration. Do not penalise the absence of speech, captions or narration; judge the pictures, headline, music mood and framing.'
         if mode == 'viral':
             prompt += '\nThis is a standalone viral highlight, not a countdown. Rank order/escalation checks mean coherent story and strongest payoff placement; do not demand ranking graphics. Original intelligible dialogue counts as finished narration. No invented narrator is required over actual dialogue.'
         if hasattr(provider, 'analyze_video'):
@@ -273,10 +287,11 @@ class ProductionDirector:
             review = parse_object(raw)
             required = ('topic_matches','hook_honest','payoffs_complete','rank_order_correct','escalation_valid',
                         'narration_grounded','captions_readable','framing_safe','production_finished','no_graphic_injury','commentary_preserves_payoff')
-            passed = all(review.get(k) is True for k in required) and confidence(review['confidence']) >= MIN_TOPIC_CONFIDENCE
-            if not isinstance(review.get('issues'), list) or review['issues']:
-                passed = False
-            if not isinstance(review.get('reason'), str) or len(review['reason'].strip())<40 or review['reason'].strip() in ('Observed evidence','Describe actual observations'):
+            checked = CRITICAL_FINAL_CHECKS if level.final_critical_only else required
+            passed = all(review.get(k) is True for k in checked) and confidence(review['confidence']) >= level.min_confidence
+            if not isinstance(review.get('issues'), list) or (review['issues'] and not level.final_critical_only):
+                passed = False       # relaxed levels accept listed minor issues when every critical check passes
+            if not isinstance(review.get('reason'), str) or len(review['reason'].strip())<level.reason_min or review['reason'].strip() in ('Observed evidence','Describe actual observations'):
                 passed = False
             observations=review.get('observations')
             if not isinstance(observations,list) or len(observations)!=len(timeline):
@@ -286,7 +301,7 @@ class ProductionDirector:
                     time=observed.get('time')
                     if (observed.get('rank')!=item.get('rank') or type(time) not in (int,float) or not math.isfinite(time)
                         or not item['timeline_start']<=time<=item['timeline_start']+item['duration']
-                        or not isinstance(observed.get('visible_event'),str) or len(observed['visible_event'].strip())<20
+                        or not isinstance(observed.get('visible_event'),str) or len(observed['visible_event'].strip())<level.visible_event_min
                         or observed['visible_event']=='Describe the specific visible action'):
                         passed=False
             return {**review, 'passed': passed, 'method': method}
@@ -294,7 +309,9 @@ class ProductionDirector:
             return {'passed': False, 'method': method, 'reason': 'Final multimodal review did not provide valid acceptance evidence.'}
 
     @staticmethod
-    async def plan_viral(provider,name,moment,sheet,transcript,feedback=None,force_commentary=False,contextual=False,failed_lines=None):
+    async def plan_viral(provider,name,moment,sheet,transcript,feedback=None,force_commentary=False,contextual=False,failed_lines=None,level=None,narrate=True,style=None,whole=False):
+        from app.studio.strictness import LEVELS
+        level = level or LEVELS['strict']
         prompt = ('STANDALONE STORY PRODUCTION. Inspect these chronological source frames and actual word-timed speech. '
             'Select a complete standalone story with hook, essential context, tension and visible payoff. No ranking mechanics. '
             'Ignore source titles. Use only visible action and supplied speech. Do not invent motives, injuries or dialogue. '
@@ -310,16 +327,32 @@ class ProductionDirector:
                         'repair_feedback':feedback,'forbidden_failed_narration':failed_lines or []},ensure_ascii=False))
         if force_commentary:
             prompt+='\nORIGINAL COMMENTARY REQUIRED even when source dialogue exists. Write one grounded spoken observation of 5–12 words, adding curiosity without spoiling the visible payoff. Preserve useful source sounds after narration. '+('Explain a visible detail that helps understand the outcome; no invented context.' if contextual else '')
-        if not transcript or force_commentary:
+        if style == 'sad_visual':
+            prompt+=('\nSAD VISUALS ONLY. The original sound is removed and nothing will be spoken or captioned: the story must be '
+                'understood from the pictures alone, with a headline over the whole video and soft sad music. Choose the cut that shows the '
+                'most poignant visible moment.')
+        if style in ('emotional','sad_visual'):
+            prompt+=('\nEMOTIONAL STORY. The "hook" is the on-screen HEADING shown over the whole video: 3-8 words that name the human '
+                'moment truthfully (for example what is happening and to whom), warm and restrained, no clickbait, no invented names, '
+                'ages, places or backstory. Keep the original sound; the title must match what is visible.')
+        if not narrate:
+            prompt+='\nDo NOT write any voice-over: set "narration" to an empty string. The original audio carries the story.'
+        if narrate and (not transcript or force_commentary):
             prompt+='\nReturn EXACTLY ONE continuous source cut longer than 10 seconds (at least 10.1 seconds), retaining the complete attempt and aftermath. Do not split it into multiple cuts and do not repeat the narration. If this window cannot support that, set complete_story=false.'
         raw = await provider.analyze_images([sheet],prompt,options={'json':True})
         try:
             plan = parse_object(raw)
-            if plan.get('complete_story') is not True or confidence(plan['confidence']) < MIN_TOPIC_CONFIDENCE:
+            if whole:
+                # The whole video is used as one cut, so the model's own cut suggestion is irrelevant and is not judged.
+                plan['cuts'] = [{'start': moment['start'], 'end': moment['end']}]
+            from app.core import qc
+            if qc.enabled() and (plan.get('complete_story') is not True or confidence(plan['confidence']) < level.min_confidence):
                 raise ValueError('Story/payoff is not verified')
             plan['title'] = ProductionDirector.validate_line(plan['title'],6)
-            plan['hook'] = ProductionDirector.validate_line(plan['hook'],7)
-            if not transcript or force_commentary:
+            plan['hook'] = ProductionDirector.validate_line(plan['hook'],8 if style in ('emotional','sad_visual') else 7)
+            if not narrate:
+                plan['narration'] = ''      # the original audio carries the story
+            elif not transcript or force_commentary:
                 plan['narration'] = ProductionDirector.validate_line(plan['narration'],12)
                 if any(tokens(plan['narration'])==tokens(line) for line in failed_lines or []):
                     raise ValueError('Rewrite the narration with different spoken wording; this exact sentence already failed speech verification.')
@@ -329,7 +362,7 @@ class ProductionDirector:
                 raise ValueError('Missing visible story evidence')
             if not isinstance(plan['cuts'],list) or not 1<=len(plan['cuts'])<=8:
                 raise ValueError('Invalid story cuts')
-            if (not transcript or force_commentary) and len(plan['cuts']) != 1:
+            if narrate and (not transcript or force_commentary) and len(plan['cuts']) != 1:
                 raise ValueError('A no-dialogue action story must use one complete continuous cut; do not repeat its narration.')
             previous=moment['start']
             word_edges=[(w['start'],w['end']) for s in transcript for w in s.get('words',[])]

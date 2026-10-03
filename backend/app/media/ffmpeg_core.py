@@ -54,7 +54,7 @@ class FFmpegCore:
         try:
             run_process(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
                          "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-preset", "veryfast",
-                         "-r", "30", "-c:a", "aac", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2", "-movflags", "+faststart", str(output_video)])
+                         "-r", "30", "-sn", "-dn", "-c:a", "aac", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2", "-movflags", "+faststart", str(output_video)])
         finally:
             list_file.unlink(missing_ok=True)
         return output_video
@@ -62,6 +62,9 @@ class FFmpegCore:
     @staticmethod
     def validate_output(path: Path, expected_duration: float):
         info = FFmpegCore.get_video_info(path)
+        from app.core import qc
+        if not qc.enabled():
+            return info          # quality control off: no spec or duration checks
         if not info["has_video"] or not info["has_audio"] or (info["width"], info["height"]) != (VIDEO_WIDTH, VIDEO_HEIGHT):
             raise ValueError("Export must contain a 1080×1920 video and audio track.")
         if info['video_codec'] != 'h264' or info['audio_codec'] != 'aac' or info['sample_rate'] != AUDIO_SAMPLE_RATE:

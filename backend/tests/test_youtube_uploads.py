@@ -33,6 +33,10 @@ def publishing(isolated_app, monkeypatch):
     monkeypatch.setattr(youtube, 'AUTH_FILE', root / 'data' / 'youtube_connection.json')
     monkeypatch.setattr(youtube, 'STORAGE_DIR', root)
     monkeypatch.setattr(youtube, 'OUTPUT_STORAGE_DIR', root / 'output')
+    # These tests exercise upload mechanics on a stub MP4; the publish gates have their own tests
+    # (test_publish_gates.py), including that queue_upload is blocked without them.
+    from app.publishing import gates
+    monkeypatch.setattr(gates, 'require_publishable', lambda clip_id: None)
     executor = Mock()
     monkeypatch.setattr(youtube, '_executor', executor)
     youtube._active.clear()
@@ -413,3 +417,111 @@ def test_legacy_staged_public_upload_also_releases_after_confirmed_review(publis
     copyright.record_review('clip','passed','Studio copyright checks passed with no issues.')
     copyright.monitor_uploads()
     assert copyright.read('clip')['state']=='PUBLISHED' and put.call_count==1
+
+
+# --- a video deleted on YouTube can be uploaded again ------------------------
+def uploaded_clip():
+    connected()
+    youtube.queue_upload('clip', {'privacy': 'private', 'made_for_kids': False})
+    youtube._update('clip', status='UPLOADED', video_id='old_video', actual_privacy='private')
+    youtube._active.clear()
+    youtube._last_remote_check.clear()
+
+
+def test_a_video_deleted_on_youtube_is_marked_deleted_and_its_copyright_record_cleared(publishing, monkeypatch):
+    uploaded_clip()
+    with database.get_connection() as c:
+        c.execute('INSERT INTO copyright_checks VALUES(?,?)', ('clip', json.dumps({'state': 'PASSED', 'video_id': 'old_video'})))
+    monkeypatch.setattr(youtube.requests, 'get', Mock(return_value=response(body={'items': []})))
+    result = youtube.verify_remote('clip', force=True)
+    assert result['status'] == 'DELETED' and 'removed from YouTube' in result['error'] and 'upload it again' in result['error']
+    with database.get_connection() as c:
+        assert c.execute('SELECT 1 FROM copyright_checks WHERE clip_id=?', ('clip',)).fetchone() is None
+
+
+def test_an_existing_video_stays_uploaded_and_its_visibility_is_refreshed(publishing, monkeypatch):
+    uploaded_clip()
+    monkeypatch.setattr(youtube.requests, 'get', Mock(return_value=response(body={'items': [{'id': 'old_video', 'status': {'uploadStatus': 'processed', 'privacyStatus': 'public'}}]})))
+    result = youtube.verify_remote('clip', force=True)
+    assert result['status'] == 'UPLOADED' and result['actual_privacy'] == 'public'
+
+
+@pytest.mark.parametrize('failure', [response(500), response(403), response(401), requests.ConnectionError('offline')])
+def test_errors_never_mark_a_video_deleted(publishing, monkeypatch, failure):
+    uploaded_clip()
+    monkeypatch.setattr(youtube.requests, 'get', Mock(side_effect=failure) if isinstance(failure, Exception) else Mock(return_value=failure))
+    assert youtube.verify_remote('clip', force=True)['status'] == 'UPLOADED'
+
+
+def test_remote_checks_are_throttled(publishing, monkeypatch):
+    uploaded_clip()
+    get = Mock(return_value=response(body={'items': [{'id': 'old_video', 'status': {'privacyStatus': 'private'}}]}))
+    monkeypatch.setattr(youtube.requests, 'get', get)
+    for _ in range(5):
+        youtube.verify_remote('clip')
+    assert get.call_count == 1
+    youtube.verify_remote('clip', force=True)
+    assert get.call_count == 2
+
+
+def test_uploading_again_after_a_deletion_starts_a_fresh_upload(publishing, monkeypatch):
+    uploaded_clip()
+    monkeypatch.setattr(youtube.requests, 'get', Mock(return_value=response(body={'items': []})))
+    fresh = youtube.queue_upload('clip', {'privacy': 'public', 'made_for_kids': False, 'title': 'Second try'})
+    assert fresh['status'] == 'QUEUED' and fresh['video_id'] is None and fresh['metadata']['title'] == 'Second try'
+    publishing['executor'].submit.assert_called()                                  # a real upload was scheduled
+    assert youtube.get_upload('clip')['status'] == 'QUEUED'
+
+
+def test_repeat_clicks_still_do_not_duplicate_a_video_that_exists(publishing, monkeypatch):
+    uploaded_clip()
+    monkeypatch.setattr(youtube.requests, 'get', Mock(return_value=response(body={'items': [{'id': 'old_video', 'status': {'privacyStatus': 'private'}}]})))
+    again = youtube.queue_upload('clip', {})
+    assert again['status'] == 'UPLOADED' and again['video_id'] == 'old_video'
+    publishing['executor'].submit.assert_called_once()                              # only the original upload, no second one
+
+
+def test_status_and_verify_endpoints_report_a_deleted_video(publishing, monkeypatch):
+    from app.api.server import app
+    uploaded_clip()
+    monkeypatch.setattr(youtube.requests, 'get', Mock(return_value=response(body={'items': []})))
+    client = TestClient(app, client=('127.0.0.1', 5000))
+    body = client.get('/api/youtube/uploads/clip').json()
+    assert body['status'] == 'DELETED'
+    assert client.get('/api/youtube/uploads/nothing').json() is None
+
+
+def test_reupload_clears_the_record_and_old_verdict_without_touching_youtube(publishing, monkeypatch):
+    from app.api.server import app
+    uploaded_clip()
+    with database.get_connection() as c:
+        c.execute('INSERT INTO copyright_checks VALUES(?,?)', ('clip', json.dumps({'state': 'PASSED'})))
+    network = Mock()
+    monkeypatch.setattr(youtube.requests, 'get', network); monkeypatch.setattr(youtube.requests, 'put', network)
+    monkeypatch.setattr(youtube.requests, 'delete', network, raising=False)
+    client = TestClient(app, client=('127.0.0.1', 5000))
+    assert client.post('/api/youtube/uploads/clip/reupload', json={}, headers={'content-type': 'application/json'}).status_code == 200
+    network.assert_not_called()                                    # YouTube is never contacted, let alone deleted from
+    assert youtube.get_upload('clip') is None
+    with database.get_connection() as c:
+        assert c.execute('SELECT 1 FROM copyright_checks WHERE clip_id=?', ('clip',)).fetchone() is None
+    again = youtube.queue_upload('clip', {'privacy': 'private', 'made_for_kids': False, 'title': 'Fresh'})
+    assert again['status'] == 'QUEUED' and again['video_id'] is None and again['metadata']['title'] == 'Fresh'
+
+
+def test_reupload_is_refused_while_a_transfer_is_running_or_nothing_exists(publishing):
+    connected()
+    with pytest.raises(youtube.YouTubeError, match='no upload'):
+        youtube.reset_upload('clip')
+    youtube.queue_upload('clip', {'privacy': 'private', 'made_for_kids': False})       # QUEUED / active
+    with pytest.raises(youtube.YouTubeError, match='Wait for the running upload'):
+        youtube.reset_upload('clip')
+
+
+def test_a_failed_upload_can_be_discarded(publishing):
+    connected()
+    youtube.queue_upload('clip', {'privacy': 'private', 'made_for_kids': False})
+    youtube._update('clip', status='FAILED', error='Connection interrupted.')
+    youtube._active.clear()
+    youtube.reset_upload('clip')
+    assert youtube.get_upload('clip') is None

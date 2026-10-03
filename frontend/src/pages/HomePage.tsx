@@ -1,11 +1,13 @@
 import React from 'react';
 import { Flame, Award, ArrowRight, Sparkles, Video, Play } from 'lucide-react';
+import { SetupCard } from '../components/SetupCard';
 
 interface HomePageProps {
-  onSelectFlow: (flow: 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot') => void;
+  onSelectFlow: (flow: 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'autoshorts') => void;
+  onOpenDiagnostics: () => void;
 }
 
-export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
+export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow, onOpenDiagnostics }) => {
   return (
     <div className="flex-1 h-screen overflow-y-auto flex flex-col items-center p-8 bg-[#FAF9F6]">
       <div className="max-w-3xl w-full flex flex-col gap-10 pb-12">
@@ -22,6 +24,10 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectFlow }) => {
             Find surprising visual moments, rank verified payoffs, or turn your own footage into finished Shorts.
           </p>
         </div>
+
+        <SetupCard onOpenDiagnostics={onOpenDiagnostics} />
+
+        <button onClick={()=>onSelectFlow('autoshorts')} className="rounded-3xl bg-fuchsia-950 text-white text-left p-7"><h2 className="text-xl font-bold">Auto Shorts · one click</h2><p className="text-sm text-fuchsia-100 mt-2">Finds promising videos across platforms, then adds a voice-over, captions and a phone-sized edit. Ready to post on YouTube.</p><span className="inline-block mt-4 font-semibold text-sm">Make Shorts →</span></button>
 
         <button onClick={()=>onSelectFlow('autopilot')} className="rounded-3xl bg-cyan-950 text-white text-left p-7"><h2 className="text-xl font-bold">Run your content studio</h2><p className="text-sm text-cyan-100 mt-2">Extreme, unbelievable & funny moments · Discovery, original commentary, copyright checks and publishing.</p><span className="inline-block mt-4 font-semibold text-sm">Open Autopilot →</span></button>
         <button onClick={()=>onSelectFlow('discovery')} className="text-left rounded-2xl border bg-white p-6"><h2 className="font-bold text-lg">Viral Discovery</h2><p className="text-sm text-zinc-500 mt-1">Discover what to create. Discover extraordinary footage and produce original viral clips, rankings or commentary.</p></button>

@@ -9,12 +9,14 @@ import { LibraryPage } from './pages/LibraryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import {DiscoveryPage} from './pages/DiscoveryPage';
 import {AutopilotPage} from './pages/AutopilotPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
+import { AutoShortsPage } from './pages/AutoShortsPage';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { AIStatus } from './types';
 import { getAIStatus } from './api';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'progress' | 'library' | 'settings'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'analytics' | 'autoshorts' | 'progress' | 'library' | 'settings'>('home');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
@@ -24,7 +26,10 @@ export function App() {
     try {
       const res = await getAIStatus();
       setAiStatus(res);
-    } catch {}
+    } catch {
+      setAiStatus({ status_text: '● ClipRank backend not reachable', provider: 'auto', is_ready: false, ranking_ready: false,
+        local_available: false, gemini_configured: false, openai_configured: false, groq_configured: false, nvidia_configured: false, active_model: '—' });
+    }
   };
 
   useEffect(() => {
@@ -62,7 +67,7 @@ export function App() {
       {/* Main Content Area */}
       <main className="flex-1 h-screen flex flex-col overflow-hidden">
         {currentTab === 'home' && (
-          <HomePage onSelectFlow={(flow) => setCurrentTab(flow)} />
+          <HomePage onSelectFlow={(flow) => setCurrentTab(flow)} onOpenDiagnostics={() => setDiagModalOpen(true)} />
         )}
 
         {currentTab === 'viral' && (
@@ -88,6 +93,9 @@ export function App() {
         {currentTab === 'library' && (
           <LibraryPage onOpenProject={handleOpenProject} />
         )}
+
+        {currentTab === 'analytics' && <AnalyticsPage />}
+        {currentTab === 'autoshorts' && <AutoShortsPage />}
 
         {currentTab === 'settings' && (
           <SettingsPage onSettingsUpdated={refreshAIStatus} />

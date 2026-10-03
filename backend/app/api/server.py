@@ -12,10 +12,15 @@ from app.api.routes import router
 from app.api.youtube_routes import router as youtube_router
 from app.api.studio_routes import router as studio_router
 from app.api.movie_routes import router as movie_router
+from app.api.ops_routes import router as ops_router
+from app.api.business_routes import router as business_router
+from app.api.auto_shorts_routes import router as auto_shorts_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: initialize database and purge stale temporary directories
+    from app.core.failures import install_log_redaction
+    install_log_redaction()
     init_db()
     from app.studio.store import init_studio
     from app.studio.worker import StudioWorker
@@ -24,6 +29,8 @@ async def lifespan(app: FastAPI):
     from app.publishing.youtube import recover_interrupted
     recover_interrupted()
     StorageManager.startup_cleanup()
+    from app.storage import usage
+    usage.maintenance()
     movie_recovery=[]
     with get_connection() as conn:
         movie_recovery=[row['id'] for row in conn.execute("SELECT j.id FROM jobs j JOIN projects p ON p.id=j.project_id WHERE p.mode='movie' AND j.status NOT IN ('COMPLETED','FAILED','CANCELLED')")]
@@ -67,6 +74,9 @@ app.include_router(router, prefix="/api")
 app.include_router(youtube_router, prefix="/api")
 app.include_router(studio_router, prefix="/api")
 app.include_router(movie_router, prefix="/api")
+app.include_router(ops_router, prefix="/api")
+app.include_router(business_router, prefix="/api")
+app.include_router(auto_shorts_router, prefix="/api")
 
 # Final media is served only after QC, including direct/guessed URLs.
 @app.get('/output/{mode}/{filename}')

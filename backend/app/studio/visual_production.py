@@ -40,7 +40,9 @@ class VisualProduction:
             'force_commentary':True,'contextual_commentary':task['format']=='commentary',
             'source_windows':{other['source_url']:other['moment'] for other in selected},
             'default_voice':'pocket:'+POCKET_PROFILES[profile.voice_profile] if profile.tts_engine=='pocket' else EDGE_VOICES[profile.voice_profile],
-            'target_duration':15,'selected_moment':item['moment'],'verified_topic':item['verified_topic']}
+            'target_duration':15,'selected_moment':item['moment'],'verified_topic':item['verified_topic'],
+            # Standalone Shorts use the whole discovered video, not just the ~10 s window found inside it.
+            'whole_video':bool(profile.use_whole_video) and task['format']!='ranking'}
         if profile.tts_engine=='kokoro':
             async def local_speech(text,path): return await LocalKokoro.synthesize_timed(text,path,profile.voice_profile)
             settings['voice_synthesizer']=local_speech

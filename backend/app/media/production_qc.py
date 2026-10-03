@@ -13,8 +13,14 @@ class ProductionQC:
     MIN_DURATION=10.1
 
     @classmethod
+    def min_duration(cls):
+        """The minimum Short length: 10.1 s with quality control on, any positive length with it off."""
+        from app.core import qc
+        return cls.MIN_DURATION if qc.enabled() else 0.5
+
+    @classmethod
     def require_duration(cls,duration):
-        if not isinstance(duration,(int,float)) or not math.isfinite(duration) or duration<cls.MIN_DURATION:
+        if not isinstance(duration,(int,float)) or not math.isfinite(duration) or duration<cls.min_duration():
             raise ValueError('Every finished Short must be longer than 10 seconds. Select a longer complete moment; looping or frozen padding is not allowed.')
         return True
 
@@ -57,12 +63,19 @@ class ProductionQC:
             cmd+=['-i',str(graphic),'-filter_complex','[0:v][1:v]overlay=0:0:eof_action=repeat[outv]',
                   '-map','[outv]','-map','0:a:0','-c:v','libx264','-crf','18','-preset','veryfast','-pix_fmt','yuv420p']
         else:cmd+=['-map','0:v:0','-map','0:a:0','-c:v','copy']
-        run_process(cmd+['-af',normalize,'-c:a','aac','-b:a','192k','-ar','48000','-ac','2',
+        run_process(cmd+['-sn','-dn','-map_metadata','-1','-af',normalize,'-c:a','aac','-b:a','192k','-ar','48000','-ac','2',
                          '-movflags','+faststart',str(output)])
         return output
 
     @staticmethod
-    def inspect(video, expected_duration, workspace, timeline, require_narration=True):
+    def inspect(video, expected_duration, workspace, timeline, require_narration=True, force=False):
+        from app.core import qc
+        if not force and not qc.enabled():
+            # Quality control is off: no inspection, nothing can reject the render.
+            info = FFmpegCore.get_video_info(video)
+            return {'passed': True, 'skipped': True, 'quality_control': 'off', 'width': info['width'], 'height': info['height'],
+                    'duration': info['duration'], 'peak_amplitude': None, 'checked_frames': 0, 'review_samples': 0,
+                    'captions_checked': False, 'retention': None, 'sheets': [], 'proxy': None, 'info': info}
         info = FFmpegCore.validate_output(video, expected_duration)
         workspace.mkdir(parents=True, exist_ok=True)
         raw = run_process(['ffmpeg','-v','error','-i',str(video),'-an','-vf','fps=6,scale=180:320',
@@ -117,7 +130,9 @@ class ProductionQC:
         run_process(['ffmpeg','-v','error','-y','-i',str(video),'-vf','scale=540:960','-c:v','libx264','-crf','29',
                      '-preset','veryfast','-maxrate','650k','-bufsize','1300k','-c:a','aac','-b:a','64k',
                      '-ar','48000','-movflags','+faststart',str(proxy)])
-        return {'passed':True,'width':info['width'],'height':info['height'],'duration':info['duration'],
+        from app.media import retention
+        retention_report=retention.review(video,info['duration'],timeline)
+        return {'passed':True,'retention':retention_report,'width':info['width'],'height':info['height'],'duration':info['duration'],
                 'peak_amplitude':round(peak,4),'checked_frames':len(frames),'review_samples':len(times),
                 'captions_checked':require_narration,'audio_master':'-14 LUFS target / -1.5 dBTP ceiling',
                 'sheets':sheets,'proxy':proxy,'info':info}

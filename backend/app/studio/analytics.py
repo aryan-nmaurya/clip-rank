@@ -9,6 +9,17 @@ from app.studio.models import now
 
 class AnalyticsCollector:
     @staticmethod
+    def published_at(clip_id):
+        """When the video became viewable: the recorded public release, else the completed upload."""
+        import time
+        with get_connection() as c:
+            row=c.execute('SELECT data FROM copyright_checks WHERE clip_id=?',(clip_id,)).fetchone()
+            if row and json.loads(row['data']).get('published_at'): return json.loads(row['data'])['published_at']
+            up=c.execute('SELECT updated_at FROM youtube_uploads WHERE clip_id=?',(clip_id,)).fetchone()
+        try: return datetime.fromisoformat(up['updated_at']).timestamp()
+        except (TypeError,ValueError): return time.time()
+
+    @staticmethod
     def collect():
         connection=youtube.connection_status()
         if not connection['connected']: return {'collected':0,'message':'Connect YouTube to collect real performance data.'}
@@ -52,6 +63,10 @@ class AnalyticsCollector:
                 data['analytics_status']='Enable YouTube Analytics API and reconnect with analytics permission.'
             else:
                 data['analytics_status']='Temporarily unavailable; retry in the next collection cycle.'
+            from app.business import learning
+            data['creative']=learning.creative_metadata(clip,project) if clip else {}
+            published_at=AnalyticsCollector.published_at(upload['clip_id'])
+            data['window']=learning.record_snapshot(video_id,published_at,data)
             with get_connection() as c:
                 c.execute('INSERT INTO performance VALUES(?,?,?) ON CONFLICT(video_id) DO UPDATE SET data=excluded.data,collected_at=excluded.collected_at',
                           (video_id,json.dumps(data),now()))

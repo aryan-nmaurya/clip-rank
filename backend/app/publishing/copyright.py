@@ -100,7 +100,8 @@ def monitor_uploads():
     with get_connection() as c:
         clips=[row['clip_id'] for row in c.execute("SELECT clip_id FROM youtube_uploads WHERE status='UPLOADED'")]
     for clip_id in clips:
-        upload=youtube.get_upload(clip_id)
+        upload=youtube.verify_remote(clip_id)
+        if not upload or upload['status']!='UPLOADED':continue     # deleted on YouTube: nothing left to review or release
         if not upload['metadata'].get('auto_release_after_copyright',
                 upload['metadata'].get('copyright_gate') and upload['metadata'].get('privacy')!='private'):continue
         previous=read(clip_id)

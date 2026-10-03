@@ -13,6 +13,23 @@ def test_secret_vault(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def quality_control_on(monkeypatch):
+    """The product default is OFF; the existing suite exercises the checks, so it runs with them ON. Tests of the OFF
+    behaviour switch it explicitly."""
+    from app.core import qc
+    monkeypatch.setattr(qc, 'enabled', lambda: True)
+
+
+@pytest.fixture(autouse=True)
+def clean_gemini_key_state():
+    """Exhausted-key bookkeeping is process-wide; no test may inherit another's."""
+    from app.ai import gemini
+    gemini._exhausted.clear(); gemini._unavailable.clear()
+    yield
+    gemini._exhausted.clear(); gemini._unavailable.clear()
+
+
+@pytest.fixture(autouse=True)
 def test_no_background_worker(monkeypatch):
     """API unit tests explicitly drive worker state, never launch real media/cloud jobs."""
     from app.studio.worker import StudioWorker
@@ -42,6 +59,7 @@ def isolated_app(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(youtube, "AUTH_FILE", tmp_path / "youtube_connection.json")
     monkeypatch.setattr(config,"STORAGE_DIR",tmp_path)
+    monkeypatch.setattr(config,"PROJECTS_STORAGE_DIR",projects)
     monkeypatch.setattr(config,"OUTPUT_STORAGE_DIR",outputs)
     monkeypatch.setattr(manager, "TEMP_STORAGE_DIR", temp)
     monkeypatch.setattr(manager, "VIRAL_OUTPUT_DIR", viral)

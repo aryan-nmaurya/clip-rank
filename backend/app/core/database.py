@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import json
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ from app.core.config import (
     HW_ACCEL,
     TEMP_RETENTION_HOURS,
 )
+
+SECRET_FIELDS = ('gemini_api_key', 'gemini_api_key_2', 'openai_api_key', 'groq_api_key', 'nvidia_api_key')
+
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
@@ -137,6 +141,14 @@ def init_db():
         for name,definition in (('watermark_enabled','INTEGER NOT NULL DEFAULT 0'),
                                 ('watermark_text',"TEXT NOT NULL DEFAULT ''")):
             if name not in columns:conn.execute(f'ALTER TABLE settings ADD COLUMN {name} {definition}')
+        for extra in ('groq_api_key', 'groq_model', 'nvidia_api_key', 'nvidia_model'):
+            if extra not in columns:conn.execute(f'ALTER TABLE settings ADD COLUMN {extra} TEXT')
+        if 'quality_control' not in columns:conn.execute('ALTER TABLE settings ADD COLUMN quality_control INTEGER NOT NULL DEFAULT 0')
+        if 'enforce_publish_gates' not in columns:conn.execute('ALTER TABLE settings ADD COLUMN enforce_publish_gates INTEGER NOT NULL DEFAULT 0')
+        if 'gemini_fallback_models' not in columns:conn.execute("ALTER TABLE settings ADD COLUMN gemini_fallback_models TEXT")
+        if 'gemini_api_key_2' not in columns:conn.execute('ALTER TABLE settings ADD COLUMN gemini_api_key_2 TEXT')
+        job_columns={r['name'] for r in conn.execute('PRAGMA table_info(jobs)')}
+        if 'failure' not in job_columns:conn.execute('ALTER TABLE jobs ADD COLUMN failure TEXT')
         # Migrate prior system-voice choices to their closest neural voice.
         from app.tts.voice_engine import LEGACY_VOICES
         for legacy, neural in LEGACY_VOICES.items():
@@ -144,6 +156,12 @@ def init_db():
         conn.execute("UPDATE settings SET local_model = ? WHERE local_model = 'qwen2.5:latest'", (DEFAULT_LOCAL_MODEL,))
         conn.execute("UPDATE settings SET gemini_model = ? WHERE gemini_model = 'gemini-2.5-flash'", (DEFAULT_GEMINI_MODEL,))
     conn.close()
+    _init_business_tables()
+
+def _init_business_tables():
+    from app.business.store import init_business
+    init_business()
+
 
 def get_settings() -> Dict[str, Any]:
     conn = get_connection()
@@ -151,7 +169,9 @@ def get_settings() -> Dict[str, Any]:
     conn.close()
     result=dict(row) if row else {}
     result['watermark_enabled']=bool(result.get('watermark_enabled',False))
-    for name in ('gemini_api_key','openai_api_key'):
+    result['enforce_publish_gates']=bool(result.get('enforce_publish_gates',False))
+    result['quality_control']=bool(result.get('quality_control',False))
+    for name in SECRET_FIELDS:
         if result.get(name)==f'keychain:{name}':
             from app.core.secrets import SecretVault
             result[name]=SecretVault.get(name)
@@ -168,16 +188,19 @@ def update_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError:
             conn.close();raise
         updates={**updates,'watermark_enabled':enabled,'watermark_text':text}
+    if 'quality_control' in updates:
+        from app.core import qc as _qc
+        _qc.reset_cache()
     allowed_fields = [
-        "ai_provider", "gemini_api_key", "gemini_model", "openai_api_key",
+        "ai_provider", "gemini_api_key", "gemini_api_key_2", "gemini_model", "gemini_fallback_models", "openai_api_key", "groq_api_key", "groq_model", "nvidia_api_key", "nvidia_model",
         "openai_model", "local_endpoint", "local_model", "default_voice",
-        "language", "hardware_accel", "temp_retention_hours", "watermark_enabled", "watermark_text"
+        "language", "hardware_accel", "temp_retention_hours", "watermark_enabled", "watermark_text", "enforce_publish_gates", "quality_control"
     ]
     fields = []
     values = []
     for k, v in updates.items():
         if k in allowed_fields:
-            if k in ('gemini_api_key','openai_api_key') and v:
+            if k in SECRET_FIELDS and v:
                 from app.core.secrets import SecretVault
                 SecretVault.set(k,v)
                 v=f'keychain:{k}'
@@ -227,7 +250,7 @@ def get_project(project_id: str) -> Optional[Dict[str, Any]]:
     p["clips"] = [dict(c) for c in clips_rows]
 
     job_row = conn.execute("SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (project_id,)).fetchone()
-    p["job"] = dict(job_row) if job_row else None
+    p["job"] = _job_dict(job_row)
     conn.close()
     return p
 
@@ -268,7 +291,7 @@ def list_projects(mode: Optional[str] = None, search: Optional[str] = None, stat
         clips_rows = conn.execute("SELECT * FROM clips WHERE project_id = ? AND job_id = (SELECT id FROM jobs WHERE project_id = clips.project_id ORDER BY created_at DESC LIMIT 1) ORDER BY rank ASC, viral_score DESC", (p["id"],)).fetchall()
         p["clips"] = [dict(c) for c in clips_rows]
         job_row = conn.execute("SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (p["id"],)).fetchone()
-        p["job"] = dict(job_row) if job_row else None
+        p["job"] = _job_dict(job_row)
         results.append(p)
 
     conn.close()
@@ -322,17 +345,26 @@ def create_job(job_id: str, project_id: str) -> Dict[str, Any]:
     conn.close()
     return get_job(job_id)
 
+def _job_dict(row) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    job = dict(row)
+    from app.core.failures import parse
+    job['failure'] = parse(job.get('failure'))
+    return job
+
+
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _job_dict(row)
 
 def get_job_by_project(project_id: str) -> Optional[Dict[str, Any]]:
     conn = get_connection()
     row = conn.execute("SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (project_id,)).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _job_dict(row)
 
 def update_job(
     job_id: str,
@@ -348,6 +380,13 @@ def update_job(
     values = [now]
 
     if status is not None:
+        from app.core.states import can_transition
+        current = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if current and not can_transition(current["status"], status):
+            # A terminal job stays terminal: a late progress write must not resurrect it.
+            logging.getLogger("ai_shorts.jobs").warning("Ignored illegal transition %s -> %s for %s", current["status"], status, job_id)
+            conn.close()
+            return get_job(job_id)
         fields.append("status = ?")
         values.append(status)
     if progress is not None:
@@ -369,6 +408,27 @@ def update_job(
         conn.execute(query, tuple(values))
     conn.close()
     return get_job(job_id)
+
+def record_job_failure(job_id: str, exc: BaseException) -> Optional[Dict[str, Any]]:
+    """Store WHAT/WHY/RETRY/NEXT once, from the stage the job was actually in.
+
+    Pipelines record before re-raising and the job engine records again as a safety
+    net; the second call is a no-op so the original stage is never overwritten.
+    """
+    from app.core.failures import failure_json, user_message
+    job = get_job(job_id)
+    if not job or (job['status'] == 'FAILED' and job.get('failure')):
+        return job
+    summary = failure_json(exc, job['status'] if job['status'] != 'QUEUED' else 'STARTING')
+    summary['stage_detail'] = job.get('current_stage')
+    conn = get_connection()
+    with conn:
+        conn.execute("UPDATE jobs SET status='FAILED', current_stage='Failed', error_message=?, detailed_error=?, failure=?, updated_at=? WHERE id=?",
+                     (user_message(summary), summary['traceback'], json.dumps(summary),
+                      datetime.now(timezone.utc).isoformat(), job_id))
+    conn.close()
+    return get_job(job_id)
+
 
 def create_or_update_clip(
     clip_id: str,

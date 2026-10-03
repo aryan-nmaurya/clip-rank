@@ -1,10 +1,10 @@
 import React from 'react';
-import { Plus, Flame, Award, Video, Settings as SettingsIcon, Film, Activity, User, Home, Compass, Bot } from 'lucide-react';
+import { Plus, Flame, Award, Video, Settings as SettingsIcon, Film, Activity, User, Home, Compass, Bot, BarChart3, Wand2 } from 'lucide-react';
 import { AIStatus } from '../types';
 
 interface SidebarProps {
-  currentTab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'progress' | 'library' | 'settings';
-  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'library' | 'settings') => void;
+  currentTab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'analytics' | 'autoshorts' | 'progress' | 'library' | 'settings';
+  onSelectTab: (tab: 'home' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot' | 'analytics' | 'autoshorts' | 'library' | 'settings') => void;
   aiStatus: AIStatus | null;
   onOpenDiagnostics: () => void;
 }
@@ -40,6 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation */}
         <nav className="flex flex-col gap-1">
+          <button onClick={()=>onSelectTab('autoshorts')} className={`w-full h-10 px-3 rounded-lg flex items-center gap-3 text-sm font-semibold ${currentTab==='autoshorts'?'bg-fuchsia-950 text-white':'bg-fuchsia-50 text-fuchsia-950'}`}><Wand2 className="w-4 h-4"/>Auto Shorts</button>
           <button onClick={()=>onSelectTab('autopilot')} className={`w-full h-10 px-3 rounded-lg flex items-center gap-3 text-sm font-semibold ${currentTab==='autopilot'?'bg-cyan-950 text-white':'bg-cyan-50 text-cyan-950'}`}><Bot className="w-4 h-4"/>Autopilot</button>
           <button onClick={()=>onSelectTab('discovery')} className={`w-full h-9 px-3 rounded-lg flex items-center gap-3 text-sm font-medium ${currentTab==='discovery'?'bg-zinc-100':'text-zinc-600 hover:bg-zinc-50'}`}><Compass className="w-4 h-4 text-cyan-700"/>Viral Discovery</button>
           <button
@@ -90,6 +91,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Video className="w-4 h-4 text-zinc-500" />
             <span>Library</span>
+          </button>
+
+          <button
+            onClick={() => onSelectTab('analytics')}
+            className={`w-full h-9 px-3 rounded-lg flex items-center gap-3 text-sm font-medium transition-colors ${
+              currentTab === 'analytics'
+                ? 'bg-zinc-100 text-zinc-900 font-semibold'
+                : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 text-zinc-500" />
+            <span>Analytics</span>
           </button>
 
           <button

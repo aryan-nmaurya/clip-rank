@@ -5,7 +5,7 @@ The local-first autonomous studio adds **Viral Discovery** and **Autopilot** for
 Creation workflows for vertical reels from real footage:
 
 - **Viral Clips:** upload a source video or paste a public video URL. Find complete standalone stories using connected vision, preserve actual dialogue, remove filler without cutting midword, and render finished highlights with timed captions and mixed original audio. Silent action footage receives grounded neural narration.
-- **Ranking Video:** discover individual videos across selected sites, supply public source URLs, or upload several raw clips. Screen out existing rankings before extracting moments and produce **two distinct #N → #1 Shorts**. Short A favors fast entertainment; Short B favors suspense and uses a completely separate set of verified source videos. Both require natural neural commentary, timed captions, safe rank graphics and finished-video QC.
+- **Ranking Video:** discover individual videos across selected sites, supply public source URLs, or upload several raw clips. Screen out existing rankings before extracting moments and produce a **#N → #1 Short** (or, optionally, **two distinct Shorts**: A favors fast entertainment, B favors suspense, built from completely separate verified sources). Discovery widens its search in rounds until enough sources verify. Every Short requires natural neural commentary, timed captions, safe rank graphics and finished-video QC.
 - **Movie / Trailer Moments:** provide an authorized movie/trailer URL or upload. Analyze the full source locally, then verify selected moments with connected vision. Automatically preserve strong actor dialogue, add brief commentary only when useful, or create cinematic edits with authorized original audio or documented licensed music. Finished 1080×1920 clips, provenance and QC metadata appear in the Library. See [movie mode](Docs/movie_moments.md) for setup and current English speech support.
 
 ## Run
@@ -55,6 +55,16 @@ Real speech recognition uses faster-whisper's base model, downloaded into `stora
 - Uploaded sources are kept under `storage/projects` so regeneration works. Successful jobs delete their managed intermediates only after final files are verified and safely copied to `storage/output`. Failed jobs retain their workspace for diagnosis; startup clears abandoned directories after the configured retention period (12 hours by default). Cleanup cannot escape managed job storage or follow an outside symlink. Finished MP4s/previews and lightweight scripts, ranking metadata and provenance remain.
 
 Only process footage you have permission to use. Public availability does not grant reuse rights.
+
+## Production hardening
+
+* **Is this machine ready?** Open the **AI Engine** badge → *System readiness* and **Run production test**. It makes a real Short from a generated test asset and reports `SYSTEM READY` or the exact failing component. Same check from the shell: `PYTHONPATH=backend .venv/bin/python -m app.core.production_test`.
+* **Delivery spec.** Every stored MP4 is verified with FFprobe + a full decode: one video and one audio stream only, 1080×1920 H.264 `yuv420p` at 30 fps, AAC 48 kHz stereo, 10.1–180 s.
+* **Publish gates.** TECHNICAL, RIGHTS and ORIGINALITY must all pass before YouTube upload. Rights fail closed: documented licences (e.g. CC BY) pass; otherwise record your rights basis for the exact sources in the clip's upload panel.
+* **Failures explain themselves** (what / why / can it retry / next step), with secrets redacted.
+* **Analytics** page: recorded revenue and costs only, YouTube results by reporting window, and a conservative learning analyzer.
+
+Details and limits are in [Docs/PRODUCTION.md](Docs/PRODUCTION.md).
 
 ## Direct YouTube upload
 

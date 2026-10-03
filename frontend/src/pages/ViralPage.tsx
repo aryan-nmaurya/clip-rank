@@ -10,9 +10,10 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
   const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [count, setCount] = useState(3);
+  const [wholeVideo, setWholeVideo] = useState(true);
   const [provider, setProvider] = useState('auto');
   const [seconds, setSeconds] = useState(25);
-  const [layout, setLayout] = useState('fit');
+  const [layout, setLayout] = useState('smart');
   const captions = true;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -31,7 +32,8 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
     const formData = new FormData();
     if (url.trim()) formData.append('video_url', url.trim());
     if (file) formData.append('video_file', file);
-    formData.append('count', String(count));
+    formData.append('count', String(wholeVideo ? 1 : count));
+    formData.append('whole_video', String(wholeVideo));
     formData.append('ai_provider', provider);
     formData.append('target_duration', String(seconds));
     formData.append('layout', layout);
@@ -113,12 +115,18 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
               />
             </label>
 
+            <label className="flex items-start gap-2.5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 cursor-pointer">
+              <input type="checkbox" aria-label="Use the whole video" checked={wholeVideo} onChange={e => setWholeVideo(e.target.checked)} className="accent-zinc-900 mt-0.5" />
+              <span><b>Use the whole video — no cutting.</b> Your video becomes one Short from start to finish, with captions, commentary and a reframed 9:16 layout. Videos longer than 3 minutes keep their first 179 seconds. Untick to let ClipRank pick highlights instead.</span>
+            </label>
+
             {/* Quick Controls: Number of Clips & AI Provider */}
             <div className="grid grid-cols-2 gap-4 pt-2">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-zinc-600">Number of clips</label>
                 <select
-                  value={count}
+                  disabled={wholeVideo}
+                  value={wholeVideo ? 1 : count}
                   onChange={(e) => setCount(Number(e.target.value))}
                   className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-800 focus:outline-none font-medium"
                 >
@@ -137,6 +145,8 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
                 >
                   <option value="auto">Auto · connected vision model</option>
                   <option value="gemini">Google AI Studio</option>
+                  <option value="groq">Groq</option>
+                  <option value="nvidia">NVIDIA NIM</option>
                   <option value="openai">OpenAI</option>
                   <option value="local">Local · vision model required</option>
                 </select>
@@ -202,7 +212,7 @@ export const ViralPage: React.FC<ViralPageProps> = ({ onStartJob }) => {
 
               <div className="flex flex-col gap-1.5">
                 <span className="font-medium text-zinc-600">Framing</span>
-                <select aria-label="Clip framing" value={layout} onChange={e => setLayout(e.target.value)} className="creator-select"><option value="fit">Full footage · blurred background</option><option value="fill">Fill frame · center crop</option></select>
+                <select aria-label="Clip framing" value={layout} onChange={e => setLayout(e.target.value)} className="creator-select"><option value="smart">Smart 9:16 · landscape cropped to follow the action</option><option value="fit">Full footage · blurred background</option><option value="fill">Fill frame · center crop</option></select>
               </div>
             </div>
           )}

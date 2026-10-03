@@ -10,7 +10,8 @@ from app.tts.alignment import snapshot,align_words,NarrationAlignmentError
 from app.tts.text import spoken_numbers
 
 VOICES={'alba':'Alba · conversational','marius':'Marius · energetic','javert':'Javert · narrator'}
-PROFILES={'Curious':'alba','Energetic':'marius','Tech Curious':'alba','Tech Energetic':'marius','Documentary':'javert','Fast Explainer':'alba'}
+PROFILES={'Curious':'alba','Energetic':'marius','Tech Curious':'alba','Tech Energetic':'marius','Documentary':'javert','Fast Explainer':'alba',
+          'Fast Entertainment':'marius','Cinematic':'javert','Suspense':'javert','Playful':'alba','Neutral':'alba'}
 MODEL_CREDIT='Voice generated with Kyutai Pocket TTS (CC BY 4.0): https://huggingface.co/kyutai/pocket-tts-without-voice-cloning'
 VOICE_CREDITS={'alba':'Alba MacKenna voice, CC BY 4.0: https://huggingface.co/kyutai/tts-voices',
                'marius':'Marius voice donation, CC0: https://huggingface.co/kyutai/tts-voices',

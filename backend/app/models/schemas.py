@@ -4,21 +4,10 @@ from pydantic import BaseModel, Field
 ProjectMode = Literal["viral", "ranking", "discovery", "movie"]
 
 JobStatus = Literal[
-    "QUEUED",
-    "INGESTING",
-    "TRANSCRIBING",
-    "ANALYZING",
-    "DETECTING_MOMENTS",
-    "DEDUPLICATING",
-    "RANKING",
-    "SCRIPTING",
-    "GENERATING_VOICE",
-    "EDITING",
-    "RENDERING",
-    "CLEANING",
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
+    "CREATED", "QUEUED", "PLANNING", "DISCOVERING", "INGESTING", "ACQUIRING", "PREPROCESSING", "TRANSCRIBING",
+    "ANALYZING", "DETECTING_MOMENTS", "DEDUPLICATING", "SCORING", "RANKING", "SCRIPTING", "VOICE", "GENERATING_VOICE",
+    "EDITING", "RENDERING", "QC", "REPAIRING", "CLEANING", "WAITING_TO_PUBLISH", "UPLOADING", "PUBLISHED",
+    "ANALYTICS_PENDING", "COMPLETED", "COMPLETE", "FAILED", "CANCELLED",
 ]
 
 class ViralCreateRequest(BaseModel):
@@ -33,12 +22,16 @@ class ViralCreateRequest(BaseModel):
 class RankingCreateRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=180)
     count: Optional[int] = Field(default=None, ge=3, le=10)
-    ai_provider: Literal["auto", "gemini", "openai", "local"] = "auto"
+    ai_provider: Literal["auto", "gemini", "openai", "local", "groq", "nvidia"] = "auto"
     source_urls: List[str] = Field(default_factory=list, max_length=20)
     narration: Literal[True] = True
-    layout: Literal["fill", "fit"] = "fit"
+    layout: Literal["fill", "fit", "smart"] = "smart"
     segment_duration: float = Field(default=7, ge=3, le=12)
     voice: Optional[str] = None
+    # One Short by default; 2 renders a second, fully disjoint A/B version.
+    variants: Literal[1, 2] = 1
+    # Search only Creative Commons footage, so the RIGHTS gate can pass on documented licences.
+    cc_only: bool = False
     source_platforms: List[Literal["youtube", "reddit", "dailymotion", "tiktok", "instagram", "vimeo"]] = Field(
         default_factory=lambda: ["youtube", "reddit", "dailymotion"], min_length=1, max_length=6)
 
@@ -80,6 +73,7 @@ class JobResponse(BaseModel):
     current_stage: str = "Queued"
     error_message: Optional[str] = None
     detailed_error: Optional[str] = None
+    failure: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
 
@@ -98,9 +92,15 @@ class ProjectResponse(BaseModel):
 class SettingsModel(BaseModel):
     ai_provider: str = "auto"
     gemini_api_key: Optional[str] = None
+    gemini_api_key_2: Optional[str] = None
+    gemini_fallback_models: Optional[str] = None
     gemini_model: str = "gemini-3.1-flash-lite"
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
+    groq_api_key: Optional[str] = None
+    groq_model: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
+    nvidia_model: Optional[str] = None
     local_endpoint: str = "http://localhost:11434"
     local_model: str = "qwen3-vl:4b"
     default_voice: str = "pocket:alba"
@@ -115,6 +115,8 @@ class AIStatusResponse(BaseModel):
     local_available: bool
     gemini_configured: bool
     openai_configured: bool
+    groq_configured: bool = False
+    nvidia_configured: bool = False
     active_model: str
     ranking_ready: bool = False
     message: Optional[str] = None

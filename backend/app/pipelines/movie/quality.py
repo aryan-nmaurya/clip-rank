@@ -100,6 +100,9 @@ class MovieQualityControl:
         raise ValueError('Independent movie review did not provide valid evidence: '+str(error)[-400:])
     @staticmethod
     async def review(provider,name,qc,analysis,format,timeline,music,feedback=None):
+        from app.core import qc as quality_control
+        if not quality_control.enabled():
+            return {'passed':True,'skipped':True,'method':'quality control off','reason':'Quality control is off: the finished clip was not reviewed.','observations':[]}
         evidence=await MovieQualityControl.observe(provider,name,qc,timeline[0]['duration'])
         prompt=('CLIPRANK FINAL MOVIE SHORT REVIEW. Inspect the ACTUAL finished MP4 or sampled final frames. '
             'Video: listen to finished audio; images: do not claim you heard it. Objective audio/caption checks run separately. '

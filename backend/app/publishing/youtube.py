@@ -196,8 +196,68 @@ def get_upload(clip_id, private=False):
     return result
 
 
+_last_remote_check = {}
+REMOTE_CHECK_SECONDS = 120
+
+
+def verify_remote(clip_id, force=False):
+    """Is an uploaded video still on YouTube? Marks it DELETED only on a clear answer from YouTube.
+
+    A network error, expired login or quota problem never marks anything deleted. Throttled to one
+    check per clip every two minutes unless forced.
+    """
+    upload = get_upload(clip_id, private=True)
+    if not upload or upload['status'] != 'UPLOADED' or not upload.get('video_id'):
+        return upload and get_upload(clip_id)
+    if not force and time.time() - _last_remote_check.get(clip_id, 0) < REMOTE_CHECK_SECONDS:
+        return get_upload(clip_id)
+    _last_remote_check[clip_id] = time.time()
+    try:
+        token = _access_token(upload['channel_id'])
+        response = requests.get(API_URL + '/videos', params={'part': 'status', 'id': upload['video_id']},
+                                headers={'Authorization': 'Bearer ' + token}, timeout=20)
+    except (YouTubeError, requests.RequestException):
+        return get_upload(clip_id)
+    if response.status_code != 200:
+        return get_upload(clip_id)
+    items = response.json().get('items', [])
+    gone = not items or items[0].get('status', {}).get('uploadStatus') in ('deleted', 'rejected', 'failed')
+    if gone:
+        reason = 'This video was removed from YouTube.' if not items else 'YouTube removed or rejected this video.'
+        _update(clip_id, status='DELETED', error=reason + ' You can upload it again.')
+        conn = database.get_connection()
+        with conn:   # a copyright verdict belongs to the old video, not to a re-upload
+            conn.execute('DELETE FROM copyright_checks WHERE clip_id = ?', (clip_id,))
+        conn.close()
+    elif items[0].get('status', {}).get('privacyStatus') != upload.get('actual_privacy'):
+        _update(clip_id, actual_privacy=items[0]['status'].get('privacyStatus'))
+    return get_upload(clip_id)
+
+
+def reset_upload(clip_id):
+    """Forget a finished/failed upload so the clip can be uploaded again as a new video.
+
+    This only clears ClipRank's record (and the old copyright verdict, which belonged to the old video).
+    It never touches YouTube: delete the old video there first to avoid a duplicate. An upload that is
+    still transferring cannot be reset.
+    """
+    with _lock:
+        upload = get_upload(clip_id, private=True)
+        if not upload:
+            raise YouTubeError('This clip has no upload to reset.')
+        if clip_id in _active or upload['status'] in ('QUEUED', 'UPLOADING'):
+            raise YouTubeError('Wait for the running upload to finish before uploading again.')
+        conn = database.get_connection()
+        with conn:
+            conn.execute('DELETE FROM youtube_uploads WHERE clip_id = ?', (clip_id,))
+            conn.execute('DELETE FROM copyright_checks WHERE clip_id = ?', (clip_id,))
+        conn.close()
+        _last_remote_check.pop(clip_id, None)
+        return None
+
+
 def _update(clip_id, **fields):
-    allowed = {'status', 'progress', 'session_uri', 'video_id', 'actual_privacy', 'error'}
+    allowed = {'status', 'progress', 'session_uri', 'video_id', 'actual_privacy', 'error'}  # status may also be DELETED
     assert set(fields).issubset(allowed)
     fields['updated_at'] = datetime.now(timezone.utc).isoformat()
     conn = database.get_connection()
@@ -284,6 +344,11 @@ def description_preview(clip_id,description=''):
     # A regenerated preview or retry must not repeat its automatic scene summary.
     extra=re.sub(r'(?is)^About this Short:?\s*\n.*?(?:\n\n|$)','',extra).strip()
     if extra:text+='\n\n'+extra
+    # Affiliate links only where the Short's actual content relates to the program.
+    from app.business.store import matching_affiliate_block
+    project=database.get_project(clip['project_id']) or {}
+    affiliate=matching_affiliate_block(' '.join([scene,clip.get('title') or '',project.get('title') or '']))
+    if affiliate:text+='\n\n'+affiliate
     if len(text.encode('utf-8'))>5000 or any(c in text for c in '<>'):
         raise YouTubeError('The description including credits must fit within 5,000 bytes without < or >.')
     try:tags=scene_tags(scene)
@@ -340,10 +405,21 @@ def queue_upload(clip_id, metadata):
             if not QualityGate.evaluate(result.get('checks',{}),result.get('editorial_scores',{}),store.profile().quality_threshold)['passed']:
                 raise YouTubeError('Rights, originality, factuality and production checks must all pass before uploading this original story.')
         path = _clip_file(clip)
+        if project and project['mode'] != 'discovery':
+            from app.publishing import gates
+            gates.require_publishable(clip_id)
         connection = connection_status()
         if not connection['connected']:
             raise YouTubeError('Connect your YouTube channel in Settings before uploading.')
         existing = get_upload(clip_id, private=True)
+        if existing and existing['status'] == 'UPLOADED':
+            existing = verify_remote(clip_id, force=True) and get_upload(clip_id, private=True)   # still there?
+        if existing and existing['status'] == 'DELETED':
+            conn = database.get_connection()
+            with conn:   # start clean: new session, new video ID, fresh metadata
+                conn.execute('DELETE FROM youtube_uploads WHERE clip_id = ?', (clip_id,))
+            conn.close()
+            existing = None
         if existing and (clip_id in _active or existing['status'] in ('UPLOADED', 'QUEUED', 'UPLOADING')):
             return get_upload(clip_id)  # Repeated clicks do not create duplicate videos.
         if existing and existing['channel_id'] != connection['channel_id']:

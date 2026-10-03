@@ -65,9 +65,16 @@ class ContentDirector:
                   (item.get('real_world_action') is True and item.get('topic_matches') is True))
         return physical and item.get('moment_verified') is True and RightsPolicyEngine.evaluate(cls.assets(item,profile),profile.rights_policy)['passed']
 
+    KEY_DIMENSIONS=('hook_strength','visual_payoff','clarity','retention_potential','commentary_potential','audience_fit')
+
     @classmethod
-    def qualified(cls,item,profile=None):
+    def qualified(cls,item,profile=None,level=None):
+        """Ready to produce. With a discovery `level` the bar is that level's; without one it is the original strict bar."""
         profile=profile or store.profile();d=item.get('dimensions',{})
+        if level is not None:
+            values=[d.get(k) for k in cls.KEY_DIMENSIONS]
+            return (cls.eligible(item,profile) and all(type(v) in (int,float) and level.dimension_min<=v<=100 for v in values)
+                    and sum(values)/len(values)>=level.average_min)
         return cls.eligible(item,profile) and all(type(d.get(k)) in (int,float) and profile.quality_threshold<=d[k]<=100
             for k in ('hook_strength','visual_payoff','clarity','retention_potential','commentary_potential','audience_fit'))
 
@@ -91,6 +98,8 @@ class ContentDirector:
         memory=PerformanceAnalyzer.intelligence()
         output=[]; seen=set()
         recent={title.casefold() for title in memory['recent_topics']}
+        from app.studio.strictness import level as strictness_level
+        shown=strictness_level()
         for item in items:
             if item['category'] not in store.profile().pillars: continue
             if item['id'] in seen or item['topic'].casefold() in recent: continue
@@ -98,7 +107,8 @@ class ContentDirector:
             if item.get('opportunity_type')=='visual_moment' and not cls.eligible(item): continue
             dimensions=item['dimensions']
             weights=cls.WEIGHTS if item.get('moment') else cls.LEGACY_WEIGHTS
-            if item.get('moment') and (item.get('moment_verified') is not True or item.get('one_second_interest') is not True or dimensions.get('clarity',0)<75): continue
+            if item.get('moment') and (item.get('moment_verified') is not True or (shown.require_one_second and item.get('one_second_interest') is not True)
+                                        or dimensions.get('clarity',0)<shown.clarity_min): continue
             if any(type(dimensions.get(k)) not in (int,float) or not math.isfinite(dimensions[k]) or not 0<=dimensions[k]<=100 for k in weights):
                 continue
             score=sum((100-dimensions[key] if key=='competition' else dimensions[key])*weight for key,weight in weights.items())
@@ -106,7 +116,7 @@ class ContentDirector:
             count=memory['content_pillar_distribution'].get(item['category'],0)
             score-=min(8,count*1.5)
             output.append({**item,'priority':round(max(0,min(100,score)),1),
-                           'production_ready':cls.qualified(item) if item.get('moment') else False})
+                           'production_ready':cls.qualified(item,level=shown) if item.get('moment') else False})
         return sorted(output,key=lambda item:(-item['priority'],item['id']))
 
     @classmethod

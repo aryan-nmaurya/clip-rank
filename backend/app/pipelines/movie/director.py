@@ -12,6 +12,9 @@ class MovieMomentScorer:
         return round(sum(s[k]*w for k,w in cls.WEIGHTS.items())-s['context_requirement']*.08,2)
     @classmethod
     def qualifies(cls,analysis):
+        from app.core import qc
+        if not qc.enabled():
+            return True        # quality control off: every analysed moment may be produced
         s=analysis['scores']
         return (analysis['complete_moment'] is True and analysis['clean_source'] is True
             and analysis['contains_watermark'] is False and analysis['confidence']>=.85

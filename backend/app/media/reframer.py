@@ -16,7 +16,8 @@ class VideoReframer:
                             reveal_sfx: Path = None, narration_offset: float = 0,
                             protected_regions=None, music_wav: Path = None,
                             framing=None, hook_duration: float = 3,
-                            credit_png: Path = None) -> Path:
+                            credit_png: Path = None, persistent_overlay: bool = False,
+                            music_level: float = None, mute_source: bool = False) -> Path:
         info = FFmpegCore.get_video_info(input_video)
         if not info["has_video"] or start < 0 or start >= info["duration"]:
             raise ValueError("Selected moment is outside the source video.")
@@ -65,12 +66,16 @@ class VideoReframer:
             next_input += 1
             cmd += ["-i", str(caption_track)]
         silent_index = None
-        if not info["has_audio"]:
+        if mute_source or not info["has_audio"]:
             silent_index = next_input
             cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
         top = round(height * .12) if title_band else 0
         bottom = round(height * .12) if title_band else 0
         canvas_h = height - top - bottom
+        if layout == "smart" and not framing:
+            # Landscape footage is cropped to a subject-following portrait window; vertical footage stays whole.
+            from app.media.smart_crop import decide
+            framing, layout = decide(input_video, info, start, duration, width, canvas_h)
         if framing and framing.get('layout')=='tracked':
             crop_width=framing['crop_width'];points=framing['points']
             if type(crop_width) is not int or not 1<=crop_width<=info['width'] or not 1<=len(points)<=32:
@@ -100,7 +105,7 @@ class VideoReframer:
         filters.append(f"[frame]pad={width}:{height}:0:{top}:black,setsar=1,fps=30,setpts=PTS-STARTPTS[canvas]")
         visual = "canvas"
         if overlay_index is not None:
-            overlay_enable = "" if title_band else f":enable='lt(t,{hook_duration:.3f})'"
+            overlay_enable = "" if (title_band or persistent_overlay) else f":enable='lt(t,{hook_duration:.3f})'"
             filters.append(f"[{visual}][{overlay_index}:v]overlay=0:0:shortest=1{overlay_enable}[decorated]")
             visual = "decorated"
         if caption_index is not None:
@@ -109,7 +114,7 @@ class VideoReframer:
         if credit_index is not None:
             filters.append(f'[{visual}][{credit_index}:v]overlay=0:0:shortest=1[credited]')
             visual='credited'
-        audio_input = "0:a" if info["has_audio"] else f"{silent_index}:a"
+        audio_input = "0:a" if (info["has_audio"] and not mute_source) else f"{silent_index}:a"
         filters.append(f"[{audio_input}]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,afade=t=in:d=0.025,afade=t=out:st={max(0,duration-.04):.3f}:d=0.04,apad[original]")
         if narration_index is not None:
             voice_duration = FFmpegCore.get_video_info(narration_wav)["duration"]
@@ -132,12 +137,14 @@ class VideoReframer:
             # Source effects remain; narration/actor dialogue always has priority.
             protections='+'.join(f'between(t,{r["start"]:.3f},{r["end"]:.3f})' for r in protected_regions)
             if narration_index is not None:protections+=('+' if protections else '')+f'between(t,{narration_offset:.3f},{voice_end:.3f})'
-            gain=f'if(gt({protections},0),0.06,0.30)' if protections else '0.60'
+            base=music_level if music_level is not None else .30
+            if protections: gain=f'if(gt({protections},0),{min(.06,base/3):.3f},{base:.3f})'
+            else: gain=f'{music_level:.3f}' if music_level is not None else '0.60'
             filters.append(f"[{music_index}:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS,volume='{gain}':eval=frame,afade=t=in:d=0.12,afade=t=out:st={max(0,duration-.35):.3f}:d=0.35,apad[music]")
             filters.append(f'[{mixed}][music]amix=inputs=2:duration=first:normalize=0[scored]')
             mixed='scored'
         filters.append(f'[{mixed}]alimiter=limit=0.89:level=false:latency=true[outa]')
-        cmd += ["-filter_complex", ";".join(filters), "-map", f"[{visual}]", "-map", "[outa]",
+        cmd += ["-filter_complex", ";".join(filters), "-map", f"[{visual}]", "-map", "[outa]", "-sn", "-dn",
                 "-t", f"{duration:.3f}", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 "-movflags", "+faststart", str(output_video)]

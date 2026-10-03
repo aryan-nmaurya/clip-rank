@@ -82,6 +82,13 @@ class StorageManager:
         if mode not in ('viral','ranking','movie') or not re.fullmatch(r'[A-Za-z0-9_-]{1,220}',clip_id) or extension != '.mp4':
             raise ValueError('Invalid final output identifier.')
         target_dir = {'viral':VIRAL_OUTPUT_DIR,'ranking':RANKING_OUTPUT_DIR,'movie':MOVIE_OUTPUT_DIR}[mode]
+        # Final gate for every engine: the spec is enforced on the bytes about to be stored.
+        from app.core import qc
+        if qc.enabled():
+            from app.media.verify import verify_mp4
+            verify_mp4(source_path)
+        elif not Path(source_path).is_file() or Path(source_path).stat().st_size == 0:
+            raise ValueError('The render produced no file.')
         target_dir.mkdir(parents=True, exist_ok=True)
         dest_path = target_dir / f"{clip_id}{extension}"
         temporary = dest_path.with_suffix('.partial')

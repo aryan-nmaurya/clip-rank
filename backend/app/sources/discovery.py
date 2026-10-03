@@ -13,16 +13,30 @@ from app.sources.ingestion import SourceIngestion
 from app.sources.ranking_policy import RankingSourcePolicy
 from app.sources.web_search import WebVideoSearch, PLATFORMS
 from app.sources.errors import RankedSourceRejected
+from app.sources.providers import build_queries, duration_reason, normalize_candidate, FlatSearchProvider
+
+
+_CC_OK = re.compile(r"creative commons attribution|cc[\s-]*by", re.I)
+_CC_RESTRICTED = re.compile(r"non-?commercial|no\s*derivatives|cc[\s-]*by[\s-]*(?:nc|nd)", re.I)
+
+
+def is_reusable_cc(license_text):
+    """Commercial, derivative-friendly Creative Commons only."""
+    text = str(license_text or "")
+    return bool(_CC_OK.search(text)) and not _CC_RESTRICTED.search(text)
+
+
+def note_rejection(rejections, record):
+    """One entry per URL: the same video found by several queries is reported once."""
+    if record.get("url") and any(r.get("url") == record["url"] for r in rejections):
+        return
+    rejections.append(record)
 
 
 class SourceDiscovery:
     @staticmethod
     def generate_search_queries(topic: str) -> List[str]:
-        base = re.sub(r"\b(?:rankings?|best|top|moments?|clips?|videos?)\b|\b\d+\b", "", topic, flags=re.I)
-        base = " ".join(base.split())
-        individual = re.sub(r'\bfails\b','fail',base,flags=re.I)
-        individual = re.sub(r'\bsaves\b','save',individual,flags=re.I)
-        return list(dict.fromkeys([individual, f"{individual} original clip", f"{individual} single attempt", f"{base} caught on camera"]))
+        return build_queries(topic)
 
     @staticmethod
     def parse_search_page(html):
@@ -63,24 +77,59 @@ class SourceDiscovery:
         visit(data)
         return entries
 
+    CC_FILTER = "EgIwAQ%3D%3D"   # YouTube's "Creative Commons" search filter
+
     @classmethod
-    def search_public_shorts(cls, query):
+    def search_public_shorts(cls, query, cc_only=False):
+        """Shorts-filtered page results merged with yt-dlp metadata (duration, views, creator).
+
+        ``cc_only`` uses YouTube's Creative Commons filter instead (no Shorts filter exists alongside it;
+        the duration prefilter removes long videos and the licence is re-checked after download).
+        """
         raw_query=f'{query} -ranking -compilation -countdown -top5 -top10'
+        if cc_only:
+            url = "https://www.youtube.com/results?" + urlencode({"search_query": raw_query}) + "&sp=" + cls.CC_FILTER
+            response = requests.get(url, timeout=25)
+            response.raise_for_status()
+            return cls.parse_search_page(response.text)
         url = "https://www.youtube.com/results?" + urlencode({"search_query": raw_query, "sp": "EgIQCQ=="})
-        response = requests.get(url, timeout=25)
-        response.raise_for_status()
-        return cls.parse_search_page(response.text)
+        scraped, error = [], None
+        try:
+            response = requests.get(url, timeout=25)
+            response.raise_for_status()
+            scraped = cls.parse_search_page(response.text)
+        except (requests.RequestException, ValueError) as exc:
+            error = exc
+        try:
+            flat = FlatSearchProvider().search(query, 20)
+        except Exception as exc:  # yt-dlp raises broad DownloadError subclasses; the scrape may still have results
+            if not scraped:
+                raise ValueError(f"YouTube search failed: {str(error or exc)[-250:]}") from exc
+            flat = []
+        merged, by_id = [], {}
+        for entry in [*flat, *scraped]:
+            if entry["id"] in by_id:
+                by_id[entry["id"]].update({k: v for k, v in entry.items() if v and not by_id[entry["id"]].get(k)})
+                continue
+            by_id[entry["id"]] = entry
+            merged.append(entry)
+        return merged
 
     @classmethod
     def discover_candidate_videos(cls, topic: str, count: int, temp_dir: Path,
                                   source_urls=None, source_files=None, source_titles=None,
-                                  source_platforms=None, rejections=None, min_candidates=None, used_keys=None, source_provenance=None) -> List[Dict[str, Any]]:
+                                  source_platforms=None, rejections=None, min_candidates=None, used_keys=None, source_provenance=None,
+                                  exclude_urls=None, round_index=0, allow_partial=False, cc_only=False) -> List[Dict[str, Any]]:
         candidates = []
         failures = []
         entries = []
         warnings = []
         rejections = rejections if rejections is not None else []
         supplied = bool(source_urls or source_files)
+        exclude_urls = set(exclude_urls or ())
+        prefix = f'r{round_index}_' if round_index else ''
+        if supplied and round_index:
+            return []  # supplied links/uploads cannot be widened
         for file_idx, path in enumerate(source_files or []):
             check_cancelled()
             source = Path(path)
@@ -94,22 +143,29 @@ class SourceDiscovery:
         for url in source_urls or []:
             entries.append({"url": url})
         if not supplied:
-            platforms = source_platforms or ["youtube", "reddit", "dailymotion"]
+            platforms = ["youtube"] if cc_only else (source_platforms or ["youtube", "reddit", "dailymotion"])
             if any(p not in PLATFORMS for p in platforms):
                 raise ValueError("Unknown source platform.")
             groups = []
-            queries = cls.generate_search_queries(topic)
+            all_queries = cls.generate_search_queries(topic)
+            # Each round searches a fresh window of queries so widening finds different footage.
+            queries = all_queries[round_index * 3: round_index * 3 + 4]
+            if not queries:
+                return []
             for platform in dict.fromkeys(platforms):
                 query_groups = []
                 for query in (queries if platform == "youtube" else queries[:1]):
                     check_cancelled()
                     try:
-                        found = cls.search_public_shorts(query) if platform == "youtube" else WebVideoSearch.search(query, platform)
+                        found = (cls.search_public_shorts(query, cc_only=True) if cc_only else cls.search_public_shorts(query)) if platform == "youtube" else WebVideoSearch.search(query, platform)
                         query_groups.append([])
                         for entry in found:
-                            reason = RankingSourcePolicy.metadata_reason(entry)
+                            entry = normalize_candidate(entry, platform)
+                            reason = RankingSourcePolicy.metadata_reason(entry) or duration_reason(entry)
+                            if entry.get("url") in exclude_urls:
+                                continue
                             if reason:
-                                rejections.append({"url": entry["url"], "title": entry.get("title"), "reason": reason})
+                                note_rejection(rejections, {"url": entry["url"], "title": entry.get("title"), "reason": reason})
                             else:
                                 query_groups[-1].append({**entry, "platform": platform})
                     except InterruptedError:
@@ -126,19 +182,27 @@ class SourceDiscovery:
                     if entry and entry["url"] not in seen:
                         seen.add(entry["url"])
                         entries.append(entry)
+            # Clips whose length suggests one event come first; unknown lengths follow, odd lengths last.
+            entries.sort(key=lambda e: 0 if 8 <= (e.get("duration") or 0) <= 75 else 1 if not e.get("duration") else 2)
             entries = entries[:MAX_SEARCH_RESULTS]
-            if not entries:
+            if not entries and round_index == 0:
                 raise ValueError("No individual videos were found. Try public source links or uploads. " + " ".join(warnings)[-600:])
         seen_content = set()
         for idx, entry in enumerate(entries[:MAX_SEARCH_RESULTS]):
             check_cancelled()
-            if len(candidates) >= (MAX_SOURCE_VIDEOS if min_candidates else min(MAX_SOURCE_VIDEOS,count*2+4)):
+            if len(candidates) >= (min(MAX_SOURCE_VIDEOS,max(min_candidates*3,min_candidates+4)) if min_candidates else min(MAX_SOURCE_VIDEOS,count*2+4)):
                 break
             try:
                 from app.sources.reuse import source_keys
                 if used_keys and source_keys(entry).intersection(used_keys):
                     rejections.append({'url':entry.get('url'),'title':entry.get('title'),'reason':'Already used in an approved Short.'})
                     continue
+                if not supplied:
+                    from app.sources import verdicts
+                    earlier = verdicts.recall(source_keys(entry), topic)
+                    if earlier:
+                        note_rejection(rejections, {'url':entry.get('url'),'title':entry.get('title'),'reason':'Judged unsuitable for this topic earlier: '+earlier})
+                        continue
                 reason = RankingSourcePolicy.metadata_reason(entry)
                 if reason:
                     rejections.append({"url": entry.get("url"), "title": entry.get("title"), "reason": reason})
@@ -148,10 +212,14 @@ class SourceDiscovery:
                     metadata = dict(entry)
                     metadata["platform"] = "Upload"
                 else:
-                    path, metadata = SourceIngestion.download_video(entry["url"], temp_dir / "downloads" / f"candidate_{idx}.mp4", reject_rankings=True)
+                    path, metadata = SourceIngestion.download_video(entry["url"], temp_dir / "downloads" / f"{prefix}candidate_{idx}.mp4", reject_rankings=True)
                 reason = RankingSourcePolicy.metadata_reason(metadata)
                 if reason:
                     rejections.append({"url": metadata.get("url"), "title": metadata.get("title"), "reason": reason})
+                    continue
+                if cc_only and not is_reusable_cc(metadata.get("license")):
+                    rejections.append({"url": metadata.get("url"), "title": metadata.get("title"),
+                                       "reason": f"Not under a reusable Creative Commons licence (found: {metadata.get('license') or 'none'})."})
                     continue
                 info = SourceIngestion.verify(path)
                 with path.open("rb") as handle:
@@ -164,7 +232,7 @@ class SourceDiscovery:
                     rejections.append({"url": metadata.get("url"), "title": metadata.get("title"), "reason": "Duplicate source footage."})
                     continue
                 seen_content.add(fingerprint)
-                candidates.append({**metadata, "id": f"source_{idx}", "file_path": str(path),
+                candidates.append({**metadata, "id": f"{prefix}source_{idx}", "file_path": str(path),
                                    "duration": info["duration"], "discovery_warnings": warnings})
             except InterruptedError:
                 raise
@@ -175,6 +243,8 @@ class SourceDiscovery:
         if failures:
             warnings.append(f"Skipped {len(failures)} unavailable source videos while finding footage.")
         required=min_candidates or count
+        if allow_partial:
+            required = 0
         if len(candidates) < required:
             detail = failures[-1] if failures else "Too few matching individual videos were found."
             raise ValueError(f"Found {len(candidates)} usable sources; this production needs {required} distinct unused videos. Excluded {len(rejections)} ranking/duplicate sources. Add raw source URLs/uploads or choose a smaller count. {detail}")

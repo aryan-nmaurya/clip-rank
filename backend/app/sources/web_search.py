@@ -57,10 +57,12 @@ class WebVideoSearch:
     @staticmethod
     def search_dailymotion(query):
         response = requests.get("https://api.dailymotion.com/videos", params={
-            "search": query, "limit": 30, "fields": "id,title,url,duration", "sort": "relevance"}, timeout=20)
+            "search": query, "limit": 30, "fields": "id,title,url,duration,views_total,created_time,owner.screenname",
+            "sort": "relevance"}, timeout=20)
         response.raise_for_status()
-        return [{"url": item["url"], "title": item["title"]} for item in response.json().get("list", [])
-                if 1 <= (item.get("duration") or 0) <= 300]
+        return [{"url": item["url"], "title": item["title"], "id": item.get("id"), "duration": item.get("duration"),
+                 "view_count": item.get("views_total"), "timestamp": item.get("created_time"), "creator": item.get("owner.screenname")}
+                for item in response.json().get("list", []) if 1 <= (item.get("duration") or 0) <= 300]
 
     @staticmethod
     def search(query, platform):

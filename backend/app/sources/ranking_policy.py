@@ -6,13 +6,21 @@ class RankingSourcePolicy:
     PATTERN = re.compile(
         r"\b(?:rank(?:ing|ings|ed)|count\s*down|compilation|tier\s*list)\b|"
         r"\btop\s*(?:\d+|three|four|five|six|seven|eight|nine|ten)\b|"
-        r"\b(?:best|top)\b.{0,40}\b(?:moments|clips|fails|videos)\b", re.I)
+        r"\b(?:best|top)\b.{0,40}\b(?:moments|clips|fails|videos)\b|"
+        # "5 extreme parkour moments", "7 drivers who couldn't catch a break": a number-led title is a list, not one event
+        r"^\W*\d{1,2}\s+(?:[\w'’-]+\s+){0,3}(?:moments|fails|saves|clips|videos|drivers|players|athletes|times|ways|things|stunts|tricks|goals|people|dogs|cats)\b", re.I)
+
+    NOT_REAL_FOOTAGE = re.compile(
+        r"\b(?:minecraft|roblox|fortnite|gameplay|gta\s*\d*|titanfall|valorant|call of duty|apex legends|"
+        r"animation|animated|cartoon|trailer|full movie|reaction video|tutorial|how to|lesson|podcast)\b", re.I)
 
     @classmethod
     def metadata_reason(cls, metadata):
         text = " ".join([str(metadata.get("title") or ""), *[str(t) for t in (metadata.get("tags") or [])]])
         if cls.PATTERN.search(text.replace("_", " ")):
             return "Title or tags identify an existing ranking/countdown/compilation."
+        if cls.NOT_REAL_FOOTAGE.search(str(metadata.get("title") or "")):
+            return "Title indicates game, animation, tutorial or commentary content rather than a raw real-world event."
         return None
 
     @classmethod

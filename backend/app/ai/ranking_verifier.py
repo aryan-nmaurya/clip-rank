@@ -23,7 +23,38 @@ def confidence(value):
 
 class RankingVerifier:
     @staticmethod
-    async def evaluate(provider, name, moments, image_path, topic, repair_feedback=None):
+    def _passthrough(raw, moments, topic, name):
+        """Quality control off: every candidate window is accepted. The model's description is used when it gave one;
+        otherwise sensible defaults. Nothing here asserts that the topic was verified."""
+        try:
+            described = {i["id"]: i for i in parse_object(raw).get("moments", []) if isinstance(i, dict) and type(i.get("id")) is int}
+        except (ValueError, TypeError, AttributeError):
+            described = {}
+        accepted = []
+        for idx, moment in enumerate(moments):
+            item = described.get(idx, {})
+            span = moment["end"] - moment["start"]
+            anchors = [item.get(k) for k in ("event_start", "payoff_time", "event_end")]
+            if not all(type(t) in (int, float) and math.isfinite(t) for t in anchors) or not moment["start"] <= anchors[0] < anchors[1] <= anchors[2] <= moment["end"]:
+                anchors = [moment["start"] + span * .15, moment["start"] + span * .55, moment["start"] + span * .9]
+            score = item.get("score", moment.get("score", 50))
+            score = round(max(0, min(100, score))) if type(score) in (int, float) and math.isfinite(score) else 50
+            label = " ".join(str(item.get("label") or moment.get("title") or "Highlight moment").split()[:6])
+            if len(label.split()) < 2:
+                label += " moment"
+            def text(key, fallback, limit=700):
+                value = item.get(key)
+                return (value.strip() if isinstance(value, str) and value.strip() else fallback)[:limit]
+            accepted.append({**moment, "score": score, "label": clean_label(label, 6), "event_start": anchors[0], "payoff_time": anchors[1],
+                "event_end": anchors[2], "commentary": " ".join(text("commentary", "Watch this moment closely.").split()[:12]),
+                "observed_action": text("observed_action", moment.get("reason") or "A visible moment from the source video.", 500),
+                "topic_evidence": text("topic_evidence", "Not verified: quality control is off."), "reason": text("reason", "Accepted without verification.", 600),
+                "topic_relevance": 0.0, "topic_confidence": 0.0, "topic_verified": False, "verified_topic": topic, "already_ranked": False,
+                "graphic_injury": None, "qc_skipped": True, "analysis_basis": f"{name} description, unverified (quality control off)"})
+        return sorted(accepted, key=lambda m: m["score"], reverse=True)
+
+    @staticmethod
+    async def evaluate(provider, name, moments, image_path, topic, repair_feedback=None, min_confidence=MIN_TOPIC_CONFIDENCE, lenient=False):
         prompt = (
             "Evaluate the video frames in temporal order. Each ROW is one candidate cut with an ID and time range. "
             "The requested topic is a strict acceptance condition. Every cut must visibly show the requested subject, "
@@ -50,7 +81,10 @@ class RankingVerifier:
             + json.dumps({"requested_topic": topic, 'independent_review_feedback':repair_feedback,"candidates": [
                 {"id": i, "start": m["start"], "end": m["end"]} for i, m in enumerate(moments)]}, ensure_ascii=False)
         )
+        from app.core import qc
         raw = await provider.analyze_images([image_path], prompt)
+        if not qc.enabled():
+            return RankingVerifier._passthrough(raw, moments, topic, name)
         if not raw:
             raise ValueError(f"{name.title()} could not inspect the footage for topic '{topic}'. Check your vision connection in Settings. Ranking cannot use unverified footage.")
         try:
@@ -70,12 +104,15 @@ class RankingVerifier:
                 if item.get("matches_topic") is not True or item.get("complete_action") is not True or item.get("already_ranked") is not False or item.get('graphic_injury') is not False:
                     continue
                 relevance, certainty = confidence(item["topic_relevance"]), confidence(item["confidence"])
-                if min(relevance, certainty) < MIN_TOPIC_CONFIDENCE:
+                if min(relevance, certainty) < min_confidence:
                     continue
                 for key in ("label", "commentary", "observed_action", "topic_evidence", "reason"):
                     if not isinstance(item.get(key), str) or not item[key].strip():
                         raise ValueError("Missing observed description")
-                if len(item["commentary"].split()) > 12 or not 2 <= len(item["label"].split()) <= 6:
+                if lenient:   # shortlisting: tidy over-long text instead of throwing the moment away
+                    item["commentary"] = " ".join(item["commentary"].split()[:12])
+                    item["label"] = " ".join(item["label"].split()[:6]) if len(item["label"].split()) >= 2 else item["label"] + " moment"
+                elif len(item["commentary"].split()) > 12 or not 2 <= len(item["label"].split()) <= 6:
                     continue
                 score = item["score"]
                 if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 100:
@@ -83,6 +120,9 @@ class RankingVerifier:
                 anchor = [item[k] for k in ('event_start','payoff_time','event_end')]
                 if any(type(t) not in (int, float) or not math.isfinite(t) for t in anchor):
                     continue
+                if lenient and not moments[idx]['start'] <= anchor[0] < anchor[1] <= anchor[2] <= moments[idx]['end']:
+                    span = moments[idx]['end'] - moments[idx]['start']      # keep the window, re-anchor inside it
+                    anchor = [moments[idx]['start'] + span * .15, moments[idx]['start'] + span * .55, moments[idx]['start'] + span * .9]
                 if not moments[idx]['start'] <= anchor[0] < anchor[1] <= anchor[2] <= moments[idx]['end']:
                     continue
                 verified.append({**moments[idx], "score": round(score), "label": clean_label(item["label"], 6),
@@ -96,7 +136,12 @@ class RankingVerifier:
         return sorted(verified, key=lambda m: m["score"], reverse=True)
 
     @staticmethod
-    async def review(provider, name, moment, image_path, topic, video_path=None):
+    async def review(provider, name, moment, image_path, topic, video_path=None, level=None):
+        from app.core import qc
+        if not qc.enabled():
+            return {"passed": True, "skipped": True, "method": "quality control off", "reason": "Quality control is off: no review was run."}
+        from app.studio.strictness import LEVELS
+        level = level or LEVELS['strict']     # callers that do not pass a level keep the original bar
         # Describe the footage before revealing the requested topic/labels.
         # Otherwise a model can affirm "fail" even for a successful rail run.
         blind_prompt=(
@@ -113,9 +158,10 @@ class RankingVerifier:
         observed=None
         try:
             observed=parse_object(blind_raw)
-            if (observed.get('complete_action') is not True or confidence(observed['confidence'])<MIN_TOPIC_CONFIDENCE
-                or observed.get('outcome') not in ('successful','failed')
-                or not isinstance(observed.get('observed_action'),str) or len(observed['observed_action'].strip())<20):
+            allowed_outcomes=('successful','failed','uncertain') if level.allow_uncertain_outcome and not re.search(r'\bfails?\b',topic,re.I) else ('successful','failed')
+            if (observed.get('complete_action') is not True or confidence(observed['confidence'])<level.min_confidence
+                or observed.get('outcome') not in allowed_outcomes
+                or not isinstance(observed.get('observed_action'),str) or len(observed['observed_action'].strip())<(20 if level.name=='strict' else 12)):
                 raise ValueError('The full event/outcome is not independently visible.')
             if re.search(r'\bfails?\b',topic,re.I) and observed['outcome']!='failed':
                 raise ValueError('Independent observation shows a successful event, not a visible failure.')
@@ -144,8 +190,9 @@ class RankingVerifier:
         try:
             result = parse_object(raw)
             certainty = confidence(result["confidence"])
-            passed = all(result.get(key) is True for key in ("matches_topic", "complete_action", "label_matches", "commentary_matches"))
-            passed = passed and certainty >= MIN_TOPIC_CONFIDENCE and isinstance(result.get("topic_evidence"), str) and bool(result["topic_evidence"].strip())
+            required = ("matches_topic", "complete_action", "label_matches", "commentary_matches") if level.check_label_match else ("matches_topic", "complete_action")
+            passed = all(result.get(key) is True for key in required)
+            passed = passed and certainty >= level.min_confidence and isinstance(result.get("topic_evidence"), str) and bool(result["topic_evidence"].strip())
             return {"passed": passed, "confidence": certainty, "method": f"{name} complete source-video review" if video_path else f"{name} final cut review",
                     'independent_observation':observed,
                     "topic_evidence": str(result.get("topic_evidence") or "")[:700],

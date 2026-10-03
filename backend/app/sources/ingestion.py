@@ -1,5 +1,7 @@
 import logging
 import shutil
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from app.core.runtime import check_cancelled
@@ -36,7 +38,8 @@ class SourceIngestion:
         return destination_file
 
     @classmethod
-    def download_video(cls, url: str, destination_file: Path, reject_rankings=False):
+    def download_video(cls, url: str, destination_file: Path, reject_rankings=False, max_height: int = 1080, max_filesize: int = 2 * 1024**3,
+                       max_seconds: int = 900, min_bytes_per_second: int = 40_000):
         """Download actual footage; unavailable sources never become demo videos."""
         cls.validate_url(url)
         try:
@@ -45,8 +48,18 @@ class SourceIngestion:
             raise RuntimeError("Video downloading requires yt-dlp. Run the app's dependency installer.") from exc
         destination_file.parent.mkdir(parents=True, exist_ok=True)
 
-        def progress(_):
+        started = time.monotonic()
+
+        def progress(status):
+            """Runs on every chunk. A transfer that is too slow or too long is abandoned, never waited on forever:
+            a throttled connection that trickles bytes never trips yt-dlp's own socket timeout."""
             check_cancelled()
+            elapsed = time.monotonic() - started
+            if elapsed > max_seconds:
+                raise TimeoutError(f"Download exceeded {max_seconds}s and was abandoned.")
+            done = status.get("downloaded_bytes") or 0
+            if status.get("status") == "downloading" and elapsed > 30 and done / elapsed < min_bytes_per_second:
+                raise TimeoutError(f"Download is too slow ({done / elapsed / 1000:.0f} KB/s) and was abandoned.")
 
         rejected_metadata = {}
 
@@ -62,7 +75,7 @@ class SourceIngestion:
             return None
 
         options = {
-            "format": "bv*[height<=1080]+ba/b[height<=1080]/best",
+            "format": f"bv*[height<={max_height}]+ba/b[height<={max_height}]/best",
             "outtmpl": str(destination_file.with_suffix("")) + ".%(ext)s",
             "merge_output_format": "mp4",
             "noplaylist": True,
@@ -72,7 +85,7 @@ class SourceIngestion:
             "socket_timeout": 20,
             "retries": 2,
             "fragment_retries": 2,
-            "max_filesize": 2 * 1024**3,
+            "max_filesize": max_filesize,
             "progress_hooks": [progress],
             "match_filter": match_filter,
         }
@@ -104,6 +117,8 @@ class SourceIngestion:
                     "platform": info.get("extractor_key") or urlparse(url).hostname,
                     "license": info.get('license') or 'unknown',
                     "license_evidence_url": info.get('license_url'),
+                    "published_at": info.get('upload_date'),
+                    "acquired_at": datetime.now(timezone.utc).isoformat(),
                 }
         except InterruptedError:
             raise

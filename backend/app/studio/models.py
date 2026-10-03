@@ -50,7 +50,11 @@ class ChannelProfile(BaseModel):
     quality_threshold: int = Field(default=80, ge=75, le=100)
     exceptional_threshold: int = Field(default=92, ge=90, le=100)
     ai_mode: Literal['auto', 'local', 'gemini'] = 'auto'
-    voice_profile: Literal['Curious','Energetic','Tech Curious', 'Tech Energetic', 'Documentary', 'Fast Explainer'] = 'Energetic'
+    discovery_strictness: Literal['relaxed', 'balanced', 'strict'] = 'relaxed'
+    production_strictness: Literal['relaxed', 'balanced', 'strict'] = 'relaxed'
+    use_whole_video: bool = True    # standalone Shorts from Discovery use the whole source video, not the ~10 s window
+    voice_profile: Literal['Curious','Energetic','Tech Curious', 'Tech Energetic', 'Documentary', 'Fast Explainer',
+                           'Fast Entertainment', 'Cinematic', 'Suspense', 'Playful', 'Neutral'] = 'Energetic'
     tts_engine: Literal['pocket', 'kokoro', 'edge'] = 'pocket'
     privacy: Literal['private', 'unlisted', 'public'] = 'public'
     made_for_kids: bool = False

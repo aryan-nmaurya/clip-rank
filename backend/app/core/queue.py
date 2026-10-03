@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from app.core.config import MAX_CONCURRENT_JOBS
-from app.core.database import get_job, get_project, get_settings, update_job, update_project
+from app.core.database import get_job, get_project, get_settings, record_job_failure, update_job, update_project
 from app.core.events import EventBroadcaster
 from app.storage.manager import StorageManager
 from app.pipelines.ranking.ranking_pipeline import RankingPipeline
@@ -76,7 +76,13 @@ class JobEngine:
             update_project(project["id"], status="CANCELLED")
             raise
         except Exception as exc:
-            logger.error("Job %s failed: %s", job_id, exc)
-            update_job(job_id, status="FAILED", current_stage="Failed", error_message=str(exc)[:1000], detailed_error=str(exc))
+            logger.exception("Job %s failed", job_id)
+            record_job_failure(job_id, exc)
             update_project(project["id"], status="FAILED")
             on_progress("FAILED", 0, "Failed")
+        finally:
+            try:
+                from app.storage import usage
+                await asyncio.to_thread(usage.maintenance)
+            except Exception:
+                logger.exception("Storage maintenance after job %s failed", job_id)

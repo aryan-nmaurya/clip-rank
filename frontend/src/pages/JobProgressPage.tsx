@@ -12,7 +12,7 @@ import {
   Award,
 } from 'lucide-react';
 import { Project, OutputClip } from '../types';
-import { getProject, cancelJob, deleteProject, regenerateProject, subscribeToJobEvents } from '../api';
+import { getProject, cancelJob, deleteProject, regenerateProject, getCheckpoint, Checkpoint, subscribeToJobEvents } from '../api';
 import { ProgressStages } from '../components/ProgressStages';
 import { VideoModal } from '../components/VideoModal';
 import { YouTubeUploadButton } from '../components/YouTubeUploadButton';
@@ -85,10 +85,16 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
     }
   };
 
-  const handleRegenerate = async () => {
+  const [checkpoint, setCheckpoint] = useState<Checkpoint>({ exists: false });
+  useEffect(() => {
+    if (project?.mode === 'ranking' && (project.status === 'FAILED' || project.status === 'CANCELLED')) getCheckpoint(projectId).then(setCheckpoint);
+    else setCheckpoint({ exists: false });
+  }, [projectId, project?.status, project?.mode]);
+
+  const handleRegenerate = async (fresh = false) => {
     setActionLoading(true);
     try {
-      const response = await regenerateProject(projectId);
+      const response = await regenerateProject(projectId, fresh);
       setCurrentJobId(response.job_id);
       await fetchProjectData();
     } catch (err: any) {
@@ -161,13 +167,18 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
 
             {((isCompleted && project.mode!=='discovery') || isFailed || isCancelled) && (
               <button
-                onClick={handleRegenerate}
+                onClick={() => handleRegenerate(false)}
+                title={checkpoint.exists ? 'Resumes from your saved progress' : undefined}
                 disabled={actionLoading}
                 className="h-8 px-3 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-700 text-xs font-medium transition-colors flex items-center gap-1.5"
               >
                 <RefreshCw className="w-3 h-3" />
-                <span>{isCompleted ? 'Regenerate' : 'Retry'}</span>
+                <span>{isCompleted ? 'Regenerate' : checkpoint.exists ? 'Retry · resume' : 'Retry'}</span>
               </button>
+            )}
+            {checkpoint.exists && (isFailed || isCancelled) && (
+              <button onClick={() => handleRegenerate(true)} disabled={actionLoading}
+                className="h-8 px-3 rounded-lg border border-zinc-200 hover:bg-zinc-100 text-zinc-500 text-xs font-medium">Start over</button>
             )}
 
             <button
@@ -202,7 +213,16 @@ export const JobProgressPage: React.FC<JobProgressPageProps> = ({ projectId, job
               )}
             </div>
 
-            {isFailed && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 whitespace-pre-wrap break-words">{job?.error_message || 'Generation failed. Try another source or analysis engine.'}</div>}
+            {isFailed && (job?.failure
+              ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 space-y-2 break-words">
+                  <p className="font-semibold">{job.failure.what} <span className="font-normal text-red-600">· {job.failure.stage_detail || job.failure.stage}</span></p>
+                  <p><span className="font-medium">Why:</span> {job.failure.why}</p>
+                  <p><span className="font-medium">Can it retry?</span> {job.failure.retryable ? 'Yes — safe to retry.' : 'Not as is — it needs a change first.'}</p>
+                  <p><span className="font-medium">Next:</span> {job.failure.next_step}</p>
+                  {checkpoint.exists && <p className="rounded-lg bg-white/70 border border-red-100 p-2 text-emerald-800">Your progress is saved: {checkpoint.verified} clip(s) verified, {checkpoint.judged} source(s) already judged{checkpoint.pool_ready ? ', approved set ready for production' : ''}. <b>Retry</b> resumes from here without repeating that work.</p>}
+                  {job.detailed_error && <details className="text-xs text-red-700"><summary className="cursor-pointer">Technical log</summary><pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap">{job.detailed_error}</pre></details>}
+                </div>
+              : <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 whitespace-pre-wrap break-words">{job?.error_message || 'Generation failed. Try another source or analysis engine.'}</div>)}
             {isFailed && project.mode==='movie' && <button onClick={onTryMovieSource || onNavigateBack} className="self-start rounded-xl bg-violet-950 text-white px-4 py-2 text-sm font-medium">Try Another Source</button>}
             {/* Progress Bar */}
             {!isFailed && !isCancelled && (

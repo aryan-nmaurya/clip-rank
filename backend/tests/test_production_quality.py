@@ -91,7 +91,7 @@ def test_gemini_transport_closes_sync_client_and_redacts_errors(monkeypatch):
     client=Mock(); context=Mock()
     context.__enter__=Mock(return_value=client); context.__exit__=Mock(return_value=False)
     client.models.generate_content.return_value.text='{"passed":true}'
-    monkeypatch.setattr(provider,'_get_client',lambda:context)
+    monkeypatch.setattr(provider,'_get_client',lambda key=None:context)
     assert asyncio.run(provider.generate_text('Review',options={'json':True})) == '{"passed":true}'
     context.__exit__.assert_called_once()
     client.models.generate_content.side_effect=RuntimeError('failed with example-secret-key')
@@ -171,7 +171,7 @@ def test_gemini_temporary_failure_retries_and_closes_each_client(monkeypatch):
     client=Mock();context=Mock()
     context.__enter__=Mock(return_value=client);context.__exit__=Mock(return_value=False)
     client.models.generate_content.side_effect=[Busy('busy'),Mock(text='Recovered')]
-    monkeypatch.setattr(provider,'_get_client',lambda:context)
+    monkeypatch.setattr(provider,'_get_client',lambda key=None:context)
     delays=[]
     async def immediate(delay):delays.append(delay)
     monkeypatch.setattr('app.ai.gemini.asyncio.sleep',immediate)

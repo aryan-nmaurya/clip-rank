@@ -15,6 +15,8 @@ from app.media.moments import MomentAnalyzer
 from app.media.captions import CaptionRenderer,font
 from app.media.reframer import VideoReframer
 from app.media.production_qc import ProductionQC
+from app.media.verify import MAX_SHORT_SECONDS
+from app.core.qc import enabled as qc_on
 from app.transcription.transcriber import Transcriber
 from app.tts.voice_engine import TTSEngine
 from app.studio.policy import RightsPolicyEngine
@@ -105,7 +107,7 @@ class MoviePipeline:
                 else:video=await run_blocking(SourceIngestion.ingest_video_file,incoming,temp/'downloads'/'source.mp4')
                 metadata={'title':settings.get('source_title') or Path(video_source).stem,'url':None,'source_id':project_id}
             info=await run_blocking(FFmpegCore.get_video_info,video)
-            if min(info['width'],info['height'])<360:raise ValueError('No strong publishable moments were found. The source is below the movie quality floor.')
+            if qc_on() and min(info['width'],info['height'])<360:raise ValueError('No strong publishable moments were found. The source is below the movie quality floor.')
             # Full decode catches corrupt footage before spending analysis API calls.
             await run_blocking(run_process,['ffmpeg','-v','error','-xerror','-i',str(video),'-map','0:v:0','-f','null','-'],timeout=900)
             fingerprint=await run_blocking(cls.fingerprint,video)
@@ -119,7 +121,7 @@ class MoviePipeline:
                 progress('ANALYZING',15,'Checking for a clean source')
                 screen=await run_blocking(SourceScreening.inspect,{**metadata,'file_path':str(video),'duration':info['duration']},temp/'source-review')
                 clean=await MovieSceneAnalyzer.understand(provider,name,screen['sheet'],None,None,settings,source_check=True)
-                if clean['clean_source'] is not True or clean['contains_watermark'] is not False:
+                if qc_on() and (clean['clean_source'] is not True or clean['contains_watermark'] is not False):
                     raise ValueError('No strong publishable moments were found. Use an authorized clean source without third-party watermark overlays.')
                 checkpoint['source_cleanliness']=clean;save()
             if 'transcript' not in checkpoint:
@@ -138,7 +140,12 @@ class MoviePipeline:
                 checkpoint.pop('verified_analyses',None);checkpoint['verification_version']=3
             if not checkpoint.get('analyses'):
                 progress('ANALYZING',32,'Finding strong moments across the complete movie')
-                candidates,preprocessing=await run_blocking(MovieSceneAnalyzer.proposals,video,transcript,settings.get('target_duration',30),count)
+                # A trailer or clip that already fits in a Short is used whole; only a feature-length source needs scenes picked from it.
+                whole=bool(settings.get('whole_video',True)) and info['duration']<=MAX_SHORT_SECONDS
+                candidates,preprocessing=await run_blocking(MovieSceneAnalyzer.proposals,video,transcript,
+                    info['duration'] if whole else settings.get('target_duration',30),count)
+                if whole and candidates:
+                    candidates=[{**candidates[0],'start':0.0,'end':float(info['duration'])}]
                 checkpoint['preprocessing']=preprocessing
                 analyses=[];invalid_run=0
                 for idx,candidate in enumerate(candidates):
@@ -150,6 +157,8 @@ class MoviePipeline:
                         analysis=await MovieSceneAnalyzer.understand(provider,name,sheet,candidate,context,settings)
                         invalid_run=0
                         start,end=MovieQualityControl.safe_bounds(analysis,transcript)
+                        if settings.get('whole_video',True) and candidate['start']==0 and abs(candidate['end']-info['duration'])<.01 and info['duration']<=MAX_SHORT_SECONDS:
+                            start,end=candidate['start'],candidate['end']      # keep the video whole; do not trim to speech edges
                         if not candidate['start']<=start<end<=candidate['end']:raise ValueError('Safe dialogue bounds escape the reviewed candidate.')
                         analysis.update(start=start,end=end)
                         if MovieMomentScorer.qualifies(analysis):analyses.append(analysis)
@@ -179,6 +188,8 @@ class MoviePipeline:
                             [s for s in transcript['segments'] if s['end']>candidate['start'] and s['start']<candidate['end']],
                             settings,video_proxy=proxy)
                         start,end=MovieQualityControl.safe_bounds(checked,transcript)
+                        if settings.get('whole_video',True) and candidate['start']==0 and abs(candidate['end']-info['duration'])<.01 and info['duration']<=MAX_SHORT_SECONDS:
+                            start,end=candidate['start'],candidate['end']
                         if not candidate['start']<=start<end<=candidate['end']:raise ValueError('Verified speech bounds escape the candidate.')
                         checked.update(start=start,end=end)
                         if MovieMomentScorer.qualifies(checked):verified.append(checked)
@@ -334,7 +345,7 @@ class MoviePipeline:
         except Exception as exc:
             for path in published:path.unlink(missing_ok=True)
             database.update_project(project_id,status='FAILED',result_data={'movie_checkpoint':checkpoint,'rejected_moments':rejected})
-            database.update_job(job_id,status='FAILED',current_stage='Failed',error_message=str(exc)[:1000],detailed_error=str(exc))
+            database.record_job_failure(job_id,exc)
             on_progress('FAILED',0,'Failed');raise
         finally:
             StorageManager.cleanup_job_temp(job_id)

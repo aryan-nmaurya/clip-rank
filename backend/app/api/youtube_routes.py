@@ -119,7 +119,20 @@ def disconnect():
 
 @router.get('/uploads/{clip_id}')
 def upload_status(clip_id: str):
-    return youtube.get_upload(clip_id)
+    # Opening an uploaded clip also checks that it still exists on YouTube (throttled).
+    return youtube.verify_remote(clip_id) if youtube.get_upload(clip_id) else None
+
+
+@router.post('/uploads/{clip_id}/reupload', dependencies=[Depends(local_mutation)])
+def reupload(clip_id: str):
+    """Clear the upload record so the clip can be uploaded again as a new video."""
+    invoke(youtube.reset_upload, clip_id)
+    return {'clip_id': clip_id, 'status': 'READY_TO_UPLOAD'}
+
+
+@router.post('/uploads/{clip_id}/verify', dependencies=[Depends(local_mutation)])
+def verify_upload(clip_id: str):
+    return invoke(youtube.verify_remote, clip_id, True)
 
 
 @router.post('/uploads/{clip_id}/preview', dependencies=[Depends(local_mutation)])

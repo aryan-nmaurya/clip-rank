@@ -5,6 +5,7 @@ import httpx
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from app.ai.base import AIProvider
+from app.ai.errors import AIQuotaExceeded
 
 logger = logging.getLogger("ai_shorts.openai")
 
@@ -35,9 +36,13 @@ class OpenAIProvider(AIProvider):
                     headers=headers,
                     json={"model": self.model, "messages": messages, "temperature": 0.7}
                 )
+                if res.status_code == 429 and "insufficient_quota" in res.text:
+                    raise AIQuotaExceeded("openai", None, "Check your OpenAI plan and billing.")
                 if res.status_code == 200:
                     data = res.json()
                     return data["choices"][0]["message"]["content"]
+        except AIQuotaExceeded:
+            raise
         except Exception as e:
             logger.warning(f"OpenAI generate_text failed: {e}")
         return None
@@ -55,8 +60,12 @@ class OpenAIProvider(AIProvider):
                 response = await client.post("https://api.openai.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json={"model": self.model, "messages": [{"role": "user", "content": parts}], "temperature": .2})
+                if response.status_code == 429 and "insufficient_quota" in response.text:
+                    raise AIQuotaExceeded("openai", None, "Check your OpenAI plan and billing.")
                 response.raise_for_status()
                 return response.json()["choices"][0]["message"]["content"]
+        except AIQuotaExceeded:
+            raise
         except Exception as exc:
             logger.warning("OpenAI frame analysis failed: %s", type(exc).__name__)
             return None

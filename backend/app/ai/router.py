@@ -2,9 +2,11 @@ import logging
 import json
 import math
 from typing import Dict, Any, List, Optional
-from app.ai.gemini import GeminiProvider
+from app.ai.gemini import GeminiProvider, DEFAULT_FALLBACK_MODELS
 from app.ai.openai_provider import OpenAIProvider
 from app.ai.local_provider import LocalProvider
+from app.ai.compat_provider import GroqProvider, NvidiaNIMProvider
+from app.ai.chain import ChainProvider
 
 logger = logging.getLogger("ai_shorts.ai_router")
 
@@ -23,7 +25,9 @@ class AIRouter:
     def get_providers(settings: Dict[str, Any]):
         gemini = GeminiProvider(
             api_key=settings.get("gemini_api_key"),
-            model=settings.get("gemini_model", "gemini-3.1-flash-lite")
+            model=settings.get("gemini_model", "gemini-3.1-flash-lite"),
+            extra_keys=[settings.get("gemini_api_key_2")],
+            fallback_models=settings.get("gemini_fallback_models") if settings.get("gemini_fallback_models") is not None else DEFAULT_FALLBACK_MODELS
         )
         openai = OpenAIProvider(
             api_key=settings.get("openai_api_key"),
@@ -35,12 +39,19 @@ class AIRouter:
         )
         return gemini, openai, local
 
+    @staticmethod
+    def get_extra_providers(settings: Dict[str, Any]):
+        groq = GroqProvider(api_key=settings.get("groq_api_key"), model=settings.get("groq_model") or None)
+        nvidia = NvidiaNIMProvider(api_key=settings.get("nvidia_api_key"), model=settings.get("nvidia_model") or None)
+        return groq, nvidia
+
     @classmethod
     async def get_active_provider(cls, settings: Dict[str, Any], preferred: str = None, task: str = "general"):
         preferred = (preferred or settings.get("ai_provider", "auto")).lower()
         gemini, openai, local = cls.get_providers(settings)
+        groq, nvidia = cls.get_extra_providers(settings)
 
-        selected = {"gemini": gemini, "openai": openai, "local": local}.get(preferred)
+        selected = {"gemini": gemini, "openai": openai, "local": local, "groq": groq, "nvidia": nvidia}.get(preferred)
         if selected:
             if await selected.is_available():
                 return selected, preferred
@@ -48,18 +59,22 @@ class AIRouter:
 
         # Automatic mode spends local compute first. Cloud is a bounded fallback
         # in the studio, and a connection fallback for the manual production modes.
-        if await local.is_available():
-            return local, "local"
-        if await gemini.is_available():
-            return gemini, "gemini"
-        if await openai.is_available():
-            return openai, "openai"
-
-        return None, "fallback"
+        # AUTO: every connected provider, best first. One provider is returned as itself; several become a
+        # chain that moves on when a provider's quota is spent.
+        members = [(name, provider) for name, provider in
+                   (("local", local), ("gemini", gemini), ("groq", groq), ("nvidia", nvidia), ("openai", openai))
+                   if await provider.is_available() and getattr(provider, "auto_eligible", True)]
+        if not members:
+            return None, "fallback"
+        if len(members) == 1:
+            return members[0][1], members[0][0]
+        return ChainProvider(members), members[0][0]
 
     @classmethod
     async def get_status(cls, settings: Dict[str, Any]) -> Dict[str, Any]:
         gemini, openai, local = cls.get_providers(settings)
+        groq, nvidia = cls.get_extra_providers(settings)
+        groq_ok, nvidia_ok = await groq.is_available(), await nvidia.is_available()
         gemini_ok = await gemini.is_available()
         openai_ok = await openai.is_available()
         local_ok = await local.is_available()
@@ -74,6 +89,12 @@ class AIRouter:
             status_text = "● AI Ready · OpenAI" if openai_ok else "● OpenAI (Key required in Settings)"
             is_ready = openai_ok
             active_model = settings.get("openai_model", "gpt-4o-mini")
+        elif preferred == "groq":
+            status_text = "● AI Ready · Groq" if groq_ok else "● Groq (Key required in Settings)"
+            is_ready, active_model = groq_ok, groq.model
+        elif preferred == "nvidia":
+            status_text = "● AI Ready · NVIDIA NIM" if nvidia_ok else "● NVIDIA NIM (Key required in Settings)"
+            is_ready, active_model = nvidia_ok, nvidia.model
         elif preferred == "local":
             status_text = "● AI Ready · Local (Ollama)" if local_ok else "● Local AI unavailable"
             is_ready = local_ok
@@ -87,6 +108,10 @@ class AIRouter:
                 status_text = "● AI Ready · Google AI Studio"
                 is_ready = True
                 active_model = settings.get("gemini_model", "gemini-3.1-flash-lite")
+            elif groq_ok or nvidia_ok:
+                status_text = "● AI Ready · " + ("Groq" if groq_ok else "NVIDIA NIM")
+                is_ready = True
+                active_model = groq.model if groq_ok else nvidia.model
             elif openai_ok:
                 status_text = "● AI Ready · OpenAI"
                 is_ready = True
@@ -103,12 +128,18 @@ class AIRouter:
             "local_available": local_ok,
             "gemini_configured": gemini_ok,
             "openai_configured": openai_ok,
+            "groq_configured": groq_ok,
+            "nvidia_configured": nvidia_ok,
             "active_model": active_model,
-            "ranking_ready": (gemini_ok or openai_ok or local_ok) if preferred == "auto" else is_ready,
+            "ranking_ready": (gemini_ok or openai_ok or local_ok or groq_ok or nvidia_ok) if preferred == "auto" else is_ready,
         }
 
     @classmethod
-    async def screen_ranking_source(cls, image_path, metadata, settings, provider_info=None, required=False):
+    async def screen_ranking_source(cls, image_path, metadata, settings, provider_info=None, required=False, lenient=False):
+        from app.core import qc
+        if not qc.enabled():
+            return {"suitable_raw": True, "already_ranked": False, "compilation": False, "reason": "Quality control is off.",
+                    "method": "source screening skipped (quality control off)"}
         provider, name = provider_info or await cls.get_active_provider(settings)
         if not provider:
             return None
@@ -119,7 +150,9 @@ class AIRouter:
             "A small creator watermark or necessary sports scoreboard alone is allowed and must remain. "
             "Look for embedded numbered lists, changing rank badges, countdown narration text, ranking headings, "
             "or a montage of unrelated clips. Subtitles, creator watermarks, and sports scoreboards alone are allowed. "
-            "If uncertain, set suitable_raw=false. Use only visible evidence. Return only JSON with actual booleans: "
+            + ("If you are unsure, set suitable_raw=true; reject only when a ranking, countdown or montage of unrelated clips is clearly visible. "
+               if lenient else "If uncertain, set suitable_raw=false. ") +
+            "Use only visible evidence. Return only JSON with actual booleans: "
             '{"suitable_raw": true, "already_ranked": false, "compilation": false, "reason": "Observed evidence"}. '
             + json.dumps({"source_title": metadata.get("title")})
         )
@@ -132,16 +165,18 @@ class AIRouter:
         except (ValueError, TypeError, AttributeError):
             pass
         if required or settings.get("ai_provider", "auto") != "auto":
-            raise ValueError(f"{name.title()} could not verify that the source is an individual raw clip. Check the vision model and retry.")
+            detail = getattr(provider, "last_error", None)
+            raise ValueError(f"{name.title()} could not verify that the source is an individual raw clip. Check the vision model and retry." + (f" Provider said: {detail}" if detail else ""))
         return None
 
     @classmethod
-    async def evaluate_moments(cls, moments, image_path, settings, transcript=None, topic=None, provider_info=None):
+    async def evaluate_moments(cls, moments, image_path, settings, transcript=None, topic=None, provider_info=None, level=None):
         """AI sees sampled source frames and real timed speech, never an invented context."""
         if topic:
             from app.ai.ranking_verifier import RankingVerifier
             provider, name = provider_info or await cls.require_ranking_provider(settings)
-            return await RankingVerifier.evaluate(provider, name, moments, image_path, topic), f"{name} verified topic and action"
+            kwargs = {} if level is None else {'min_confidence': level.min_confidence, 'lenient': level.lenient_labels}
+            return await RankingVerifier.evaluate(provider, name, moments, image_path, topic, **kwargs), f"{name} verified topic and action"
         provider, name = await cls.get_active_provider(settings)
         if not provider:
             return moments, "visual metrics"

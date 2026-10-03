@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Form, Depends
 from app.api.youtube_routes import local_access,local_mutation
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.config import (
@@ -66,6 +67,8 @@ async def get_ai_status():
         local_available=res["local_available"],
         gemini_configured=res["gemini_configured"],
         openai_configured=res["openai_configured"],
+        groq_configured=res.get("groq_configured", False),
+        nvidia_configured=res.get("nvidia_configured", False),
         active_model=res["active_model"],
         ranking_ready=res["ranking_ready"],
     )
@@ -109,14 +112,14 @@ def api_get_settings():
 
 def public_settings(settings):
     result=dict(settings)
-    for name in ('gemini_api_key','openai_api_key'):
+    for name in ('gemini_api_key','gemini_api_key_2','openai_api_key','groq_api_key','nvidia_api_key'):
         result[name+'_configured']=bool(result.get(name))
         result.pop(name,None)
     return result
 
 @router.post("/settings",dependencies=[Depends(local_access),Depends(local_mutation)])
 def api_update_settings(updates: Dict[str, Any]):
-    updates={key:value for key,value in updates.items() if key not in ('gemini_api_key','openai_api_key') or value is not None}
+    updates={key:value for key,value in updates.items() if key not in ('gemini_api_key','gemini_api_key_2','openai_api_key','groq_api_key','nvidia_api_key') or value is not None}
     if "default_voice" in updates:
         try:
             updates["default_voice"] = TTSEngine.resolve_voice(updates["default_voice"])
@@ -130,7 +133,7 @@ def api_update_settings(updates: Dict[str, Any]):
 async def vision_connections():
     settings = get_settings()
     gemini, _, local = AIRouter.get_providers(settings)
-    return {"gemini": {"configured": await gemini.is_available(), "model": gemini.model,
+    return {"gemini": {"configured": await gemini.is_available(), "model": gemini.model, "keys": gemini.key_status(),
                         "message": "Key configured; use Test vision to check images and authentication." if await gemini.is_available() else "Add your Gemini API key when ready."},
             "local": await local.connection_status()}
 
@@ -138,14 +141,17 @@ async def vision_connections():
 @router.post("/vision/test")
 async def test_vision_connection(payload: Dict[str, Any]):
     selected = payload.get("provider")
-    if selected not in {"gemini", "local"}:
-        raise HTTPException(400, "Select Gemini or local vision.")
+    if selected not in {"gemini", "local", "groq", "nvidia"}:
+        raise HTTPException(400, "Select Gemini, Groq, NVIDIA NIM or local vision.")
     settings = {**get_settings(), **{key: value for key, value in payload.items() if value is not None
-                                   if key in {"gemini_api_key", "gemini_model", "local_endpoint", "local_model"}}}
+                                   if key in {"gemini_api_key", "gemini_api_key_2", "gemini_model", "local_endpoint", "local_model",
+                                                                 "groq_api_key", "groq_model", "nvidia_api_key", "nvidia_model"}}}
     gemini, _, local = AIRouter.get_providers(settings)
-    provider = gemini if selected == "gemini" else local
+    groq, nvidia = AIRouter.get_extra_providers(settings)
+    provider = {"gemini": gemini, "local": local, "groq": groq, "nvidia": nvidia}[selected]
     if not await provider.is_available():
-        message = "Enter a Gemini API key to test vision." if selected == "gemini" else (await local.connection_status())["message"]
+        message = ({"gemini": "Enter a Gemini API key to test vision.", "groq": "Enter a Groq API key to test vision.",
+                    "nvidia": "Enter an NVIDIA NIM API key to test vision."}.get(selected) or (await local.connection_status())["message"])
         return {"passed": False, "message": message}
     from PIL import Image, ImageDraw
     from app.ai.ranking_verifier import parse_object
@@ -158,7 +164,11 @@ async def test_vision_connection(payload: Dict[str, Any]):
     draw.rectangle((360, 190, 435, 265), fill="blue")
     sample.save(path)
     try:
-        raw = await provider.analyze_images([path], 'Inspect the image. Return ONLY JSON: {"red_circles": <integer count>, "blue_squares": <integer count>}.')
+        from app.ai.errors import AIQuotaExceeded
+        try:
+            raw = await provider.analyze_images([path], 'Inspect the image. Return ONLY JSON: {"red_circles": <integer count>, "blue_squares": <integer count>}.')
+        except AIQuotaExceeded as exc:
+            return {"passed": False, "message": str(exc)}
         try:
             result = parse_object(raw)
             passed = type(result.get("red_circles")) is int and type(result.get("blue_squares")) is int and result["red_circles"] == 1 and result["blue_squares"] == 2
@@ -243,7 +253,7 @@ async def save_upload(upload: UploadFile, project_id: str, index=0, job_id=None)
 
 
 def validate_provider(provider):
-    if provider not in {"auto", "local", "openai", "gemini"}:
+    if provider not in {"auto", "local", "openai", "gemini", "groq", "nvidia"}:
         raise HTTPException(400, "Unknown AI provider.")
 
 
@@ -265,12 +275,13 @@ def enqueue_project(project_id, mode, title, data, job_id=None):
 @router.post("/projects/viral")
 async def create_viral_project(video_url: Optional[str] = Form(None), count: int = Form(3),
                                ai_provider: str = Form("auto"), video_file: Optional[UploadFile] = File(None),
-                               target_duration: float = Form(25), layout: str = Form("fit"),
-                               captions: bool = Form(True)):
-    if not 1 <= count <= 10 or not 10.1 <= target_duration <= 60:
+                               target_duration: float = Form(25), layout: str = Form("smart"),
+                               captions: bool = Form(True), whole_video: bool = Form(True)):
+    from app.core import qc
+    if not 1 <= count <= 10 or not (10.1 if qc.enabled() else 3) <= target_duration <= 60:
         raise HTTPException(400, "Choose 1–10 clips with a target duration longer than 10 seconds, up to 60 seconds.")
     validate_provider(ai_provider)
-    if layout not in {"fill", "fit"}:
+    if layout not in {"fill", "fit", "smart"}:
         raise HTTPException(400, "Unknown framing layout.")
     if not captions:
         raise HTTPException(400, 'Production speech captions are mandatory.')
@@ -285,7 +296,23 @@ async def create_viral_project(video_url: Optional[str] = Form(None), count: int
     return enqueue_project(project_id, "viral", f"Clips · {source_title}", {
         "video_source": source, "video_url": video_url, "source_title": source_title,
         "count": count, "ai_provider": ai_provider, "target_duration": target_duration,
-        "layout": layout, "captions": captions})
+        "layout": layout, "captions": captions, "whole_video": whole_video})
+
+
+@router.get("/ranking/topics")
+def api_ranking_topics(breadth: str = Query("all")):
+    """Suggested topics, filterable by how many source clips are likely to qualify."""
+    from app.pipelines.ranking import topics
+    try:
+        return {"topics": topics.catalog(breadth)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/ranking/topics/analyze")
+def api_analyze_topic(topic: str = Query("", max_length=180)):
+    from app.pipelines.ranking import topics
+    return topics.analyze(topic)
 
 
 @router.post("/projects/ranking")
@@ -295,8 +322,8 @@ async def create_ranking_project(req: RankingCreateRequest):
         raise HTTPException(400, "Topic is required.")
     count = req.count or inferred
     urls = validate_urls(req.source_urls)
-    if urls and len(set(urls)) < count*2:
-        raise HTTPException(400, f"Two Top {count} Shorts need at least {count*2} distinct unused source links.")
+    if urls and len(set(urls)) < count*req.variants:
+        raise HTTPException(400, f"{'Two Top' if req.variants==2 else 'A Top'} {count} {'Shorts need' if req.variants==2 else 'Short needs'} at least {count*req.variants} distinct unused source links.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
     overrides = req.model_dump()
     if req.voice:
@@ -312,16 +339,18 @@ async def create_ranking_project(req: RankingCreateRequest):
 @router.post("/projects/ranking/upload")
 async def create_ranking_upload(topic: str = Form(...), count: int = Form(5),
                                 ai_provider: str = Form("auto"), narration: bool = Form(True),
-                                layout: str = Form("fit"), segment_duration: float = Form(7),
-                                voice: Optional[str] = Form(None),
+                                layout: str = Form("smart"), segment_duration: float = Form(7),
+                                voice: Optional[str] = Form(None), variants: int = Form(1),
                                 video_files: List[UploadFile] = File(...)):
     if not topic.strip() or len(topic) > 180 or not 3 <= count <= 10 or not 3 <= segment_duration <= 12:
         raise HTTPException(400, "Provide a topic, 3–10 ranks, and 3–12 seconds per clip.")
     validate_provider(ai_provider)
     if not narration:
         raise HTTPException(400, 'Production ranking requires original narration and timed captions.')
-    if layout not in {"fill", "fit"} or not count*2 <= len(video_files) <= 20:
-        raise HTTPException(400, f"Upload between {count*2} and 20 distinct unused videos for the two Shorts and choose a valid layout.")
+    if variants not in (1, 2):
+        raise HTTPException(400, "Choose one Short or an A/B pair.")
+    if layout not in {"fill", "fit", "smart"} or not count*variants <= len(video_files) <= 20:
+        raise HTTPException(400, f"Upload between {count*variants} and 20 distinct unused videos and choose a valid layout.")
     project_id = f"proj_r_{uuid.uuid4().hex[:12]}"
     voice_settings = {}
     if voice:
@@ -338,7 +367,7 @@ async def create_ranking_upload(topic: str = Form(...), count: int = Form(5),
         return enqueue_project(project_id, "ranking", f"Ranking {parsed}", {
             "topic": parsed, "count": count, "source_files": sources,
             "ai_provider": ai_provider, "narration": narration, "layout": layout,
-            "segment_duration": segment_duration,
+            "segment_duration": segment_duration, "variants": variants,
             **voice_settings,
             "source_titles": [Path(v.filename or "Highlight").stem for v in video_files]})
     except Exception:
@@ -376,12 +405,51 @@ def api_get_project_result(project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     return {"clips": [c for c in p.get('clips',[]) if clip_passed_production_qc(c)], "status": p.get("status")}
 
+class RightsRecord(BaseModel):
+    basis: str
+    note: str = Field(min_length=10, max_length=1000)
+    evidence_url: Optional[str] = None
+    creator: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.get("/clips/{clip_id}/gates", dependencies=[Depends(local_access)])
+async def api_clip_gates(clip_id: str):
+    """TECHNICAL / RIGHTS / ORIGINALITY verdicts that decide whether a clip may be published."""
+    from app.publishing import gates
+    if not get_clip(clip_id):
+        raise HTTPException(404, "Clip not found")
+    return await run_blocking(gates.evaluate, clip_id)
+
+
+@router.post("/projects/{project_id}/rights", dependencies=[Depends(local_access), Depends(local_mutation)])
+async def api_record_rights(project_id: str, payload: RightsRecord):
+    """The channel owner states the rights basis for this project's exact sources."""
+    from app.publishing import gates
+    try:
+        return gates.record_attestation(project_id, payload.basis, payload.note, payload.evidence_url, payload.creator)
+    except gates.AttestationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/checkpoint")
+def api_project_checkpoint(project_id: str):
+    """Saved progress a Retry would resume from (Ranking). `exists: false` means Retry starts from the beginning."""
+    from app.pipelines.ranking import checkpoint
+    if not get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return checkpoint.summary(project_id)
+
+
 @router.post("/projects/{project_id}/regenerate")
-async def api_regenerate_project(project_id: str):
+async def api_regenerate_project(project_id: str, fresh: bool = Query(False)):
+    """Retry. Ranking resumes from its saved checkpoint unless `fresh=true` asks to start over."""
     from app.core.database import update_project, get_connection
     p = get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+    if fresh and p["mode"] == "ranking":
+        from app.pipelines.ranking import checkpoint
+        checkpoint.clear(project_id)
     if p['mode']=='discovery':
         from app.studio import store
         previous=store.task(p['input_data'].get('studio_task_id',''))

@@ -9,7 +9,8 @@ from app.core.runtime import run_blocking, run_process
 from app.media.ffmpeg_core import FFmpegCore
 from app.media.production_qc import ProductionQC
 
-PROFILES={'Curious':'af_heart','Energetic':'am_fenrir','Tech Curious':'af_heart','Tech Energetic':'am_fenrir','Documentary':'bm_george','Fast Explainer':'af_bella'}
+PROFILES={'Curious':'af_heart','Energetic':'am_fenrir','Tech Curious':'af_heart','Tech Energetic':'am_fenrir','Documentary':'bm_george','Fast Explainer':'af_bella',
+          'Fast Entertainment':'am_fenrir','Cinematic':'bm_george','Suspense':'bm_george','Playful':'af_bella','Neutral':'af_heart'}
 _lock=threading.Lock()
 
 

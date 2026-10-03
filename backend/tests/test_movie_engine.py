@@ -114,8 +114,7 @@ def test_mobile_crop_jumps_at_a_shot_cut_instead_of_panning_across_the_new_subje
     assert after[2]>180 and after[0]<50
 
 
-@pytest.mark.parametrize('format',['DIALOGUE','COMMENTARY','AESTHETIC'])
-def test_finished_movie_formats_render_qc_and_clean_temp(isolated_app,long_footage,monkeypatch,format):
+def run_movie_fixture(isolated_app,long_footage,monkeypatch,format,whole=False,expect=12):
     from app.core import database,config
     from app.storage import manager
     from app.ai.router import AIRouter
@@ -163,14 +162,14 @@ def test_finished_movie_formats_render_qc_and_clean_temp(isolated_app,long_foota
     database.create_project('movie_project','movie','Test movie',{});database.create_job('movie_job','movie_project')
     settings={'authorization_attested':True,'source_audio_authorized':True,'source_title':'Fixture',
         'source_creator':'Test fixture','source_license':'Original test fixture','license_reference':'https://example.com/fixture',
-        'source_attribution':'Test fixture · Original','rights_policy':'documented_permission'}
+        'source_attribution':'Test fixture · Original','rights_policy':'documented_permission','whole_video':whole}
     asyncio.run(MoviePipeline.run('movie_job','movie_project',str(long_footage[0]),1,settings,lambda *args:None))
     project=database.get_project('movie_project');assert project['status']=='COMPLETED'
     assert len(project['clips'])==1 and project['clips'][0]['subtitle']=={'DIALOGUE':'Dialogue Moment','COMMENTARY':'Commentary Moment','AESTHETIC':'Cinematic Moment'}[format]
     assert len(voice_calls)==(1 if format=='COMMENTARY' else 0)
     record=project['result_data']['moments'][0]
     assert record['format']==format and record['qc']['passed'] and record['qc']['format_checked'] and record['final_review']['passed']
-    path=movie/(project['clips'][0]['id']+'.mp4');FFmpegCore.validate_output(path,12)
+    path=movie/(project['clips'][0]['id']+'.mp4');FFmpegCore.validate_output(path,expect)
     assert database.clip_passed_production_qc(project['clips'][0])
     assert (movie/'movie_project_metadata.json').is_file()
     assert project['result_data']['analysis_archive']['verified_analyses']
@@ -180,6 +179,25 @@ def test_finished_movie_formats_render_qc_and_clean_temp(isolated_app,long_foota
         assert record['timeline'][0]['speech']['duration']>=record['duration']*.75
     assert not (isolated_app['temp']/'movie_job').exists()
     assert long_footage[0].is_file()  # The user's source outside job storage is untouched.
+    return project,record
+
+
+@pytest.mark.parametrize('format',['DIALOGUE','COMMENTARY','AESTHETIC'])
+def test_finished_movie_formats_render_qc_and_clean_temp(isolated_app,long_footage,monkeypatch,format):
+    run_movie_fixture(isolated_app,long_footage,monkeypatch,format,whole=False,expect=12)
+
+
+def test_a_movie_source_that_fits_in_a_short_is_used_whole(isolated_app,long_footage,monkeypatch):
+    # The 24 s fixture is the entire source: the finished clip is all 24 s, not the 12 s window the analyzer pointed at.
+    project,record=run_movie_fixture(isolated_app,long_footage,monkeypatch,'AESTHETIC',whole=True,expect=24)
+    assert project['clips'][0]['duration']>23.5 and record['duration']>23.5
+
+
+def test_a_feature_length_source_still_has_scenes_picked_from_it(isolated_app,long_footage,monkeypatch):
+    from app.pipelines.movie import movie_pipeline
+    monkeypatch.setattr(movie_pipeline,'MAX_SHORT_SECONDS',10.0)      # pretend the 24 s source is too long to be a Short
+    project,record=run_movie_fixture(isolated_app,long_footage,monkeypatch,'AESTHETIC',whole=True,expect=12)
+    assert project['clips'][0]['duration']<13
 
 
 def test_movie_failure_and_cancellation_clean_only_managed_workspace(isolated_app,monkeypatch):

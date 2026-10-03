@@ -37,6 +37,9 @@ def test_moment_identity_and_score_ignore_views_and_wrong_niches(visual):
     assert ContentDirector.rank([b,a])[0]['id']==a['id']
     other={**a,'moment':{**a['moment'],'start':15.,'end':25.}}
     assert store.put_opportunity(other)['id']!=a['id']
+    # 'one second' interest is demanded at the Strict level; the default Relaxed level keeps such a moment in the list.
+    assert ContentDirector.rank([{**a,'one_second_interest':False}])
+    store.save_profile(store.profile().model_copy(update={'discovery_strictness':'strict'}))
     assert not ContentDirector.rank([{**a,'one_second_interest':False}])
     assert not ContentDirector.rank([{**a,'category':'ai_tools'}])
 

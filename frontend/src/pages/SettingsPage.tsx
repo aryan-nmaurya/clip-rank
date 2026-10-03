@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Eye, EyeOff, Save, Sparkles, HardDrive, KeyRound, Cpu } from 'lucide-react';
 import { Settings, AIProviderType } from '../types';
+import { StrictnessControl } from '../components/StrictnessControl';
 import { getSettings, updateSettings, getVisionConnections, testVisionConnection } from '../api';
 import { VoicePicker } from '../components/VoicePicker';
 import { YouTubeSettings } from '../components/YouTubeSettings';
@@ -13,7 +14,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [connections, setConnections] = useState<any>(null);
-  const [testingVision, setTestingVision] = useState<'gemini' | 'local' | null>(null);
+  const [testingVision, setTestingVision] = useState<'gemini' | 'local' | 'groq' | 'nvidia' | null>(null);
   const [visionTests, setVisionTests] = useState<Record<string, { passed: boolean; message: string }>>({});
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
     }
   };
 
-  const testVision = async (provider: 'gemini' | 'local') => {
+  const testVision = async (provider: 'gemini' | 'local' | 'groq' | 'nvidia') => {
     if (!settings) return;
     setTestingVision(provider);
     try {
@@ -91,6 +92,14 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
         </div>
 
         {error && <p role="alert" className="text-red-600 text-sm">{error}</p>}
+        <StrictnessControl />
+        <label className="flex items-start gap-2 rounded-2xl border border-zinc-200 bg-white p-4 text-xs text-zinc-700 cursor-pointer">
+          <input type="checkbox" aria-label="Quality control" checked={!!settings.quality_control}
+            onChange={(e) => setSettings({ ...settings, quality_control: e.target.checked })} className="accent-zinc-900 mt-0.5" />
+          <span><b>Quality control</b> — {settings.quality_control ? 'ON: every video is inspected, the AI verifies and reviews footage and finished videos, and weak results are rejected or repaired.'
+            : 'OFF: nothing is rejected for quality. Videos are rendered and stored as they come out, the AI is not asked to verify or review them (fewer AI calls, faster, more videos), and there is no minimum length. Check each video yourself before publishing: results can include wrong footage, black or silent sections, or the wrong topic.'}
+            {' '}Always required either way: readable source footage, captions that match the voice, and enough clips to fill a ranking. Save to apply.</span>
+        </label>
         {/* Section 1: AI Engine Provider */}
         <div className="bg-white rounded-2xl border border-zinc-200/90 shadow-sm p-6 flex flex-col gap-5">
           <div className="flex items-center gap-2.5 pb-2 border-b border-zinc-100">
@@ -138,6 +147,13 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
                 Gemini
               </span>
             </div>
+
+            {([['groq', 'Groq', 'Fast hosted Llama vision. Frame-based review.'], ['nvidia', 'NVIDIA NIM', 'Hosted NVIDIA vision models. Frame-based review.']] as const).map(([id, title, text]) => (
+              <div key={id} onClick={() => setSettings({ ...settings, ai_provider: id })}
+                className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between gap-3 ${settings.ai_provider === id ? 'border-zinc-900 bg-zinc-50/70 ring-1 ring-zinc-900' : 'border-zinc-200 hover:border-zinc-300 bg-white'}`}>
+                <div className="flex flex-col gap-1"><span className="text-xs font-semibold text-zinc-900">{title}</span><span className="text-[11px] text-zinc-500 leading-relaxed">{text}</span></div>
+                <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">{id}</span>
+              </div>))}
 
             {/* OpenAI */}
             <div
@@ -204,6 +220,54 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
             </div>
           </div>
 
+          <label className="flex items-start gap-2 text-xs text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-xl p-3 cursor-pointer">
+            <input type="checkbox" aria-label="Require rights check before upload" checked={!!settings.enforce_publish_gates}
+              onChange={(e) => setSettings({ ...settings, enforce_publish_gates: e.target.checked })} className="accent-zinc-900 mt-0.5" />
+            <span><b>Require a rights and originality check before YouTube upload</b> — off by default. When on, an upload is blocked until the footage has a documented licence or you record a rights basis. Uploading footage you don't have rights to can cause copyright claims or strikes on your channel; that responsibility is yours either way. A broken video file is always blocked.</span>
+          </label>
+
+          {/* Second Google AI Studio key: used automatically when the first key's quota is spent */}
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5">
+              <KeyRound className="w-3.5 h-3.5 text-zinc-500" />
+              <span>Second Google AI Studio API Key (Optional · automatic failover)</span>
+            </label>
+            <input
+              aria-label="Second Gemini API key"
+              type={showGeminiKey ? 'text' : 'password'}
+              value={settings.gemini_api_key_2 || ''}
+              placeholder={settings.gemini_api_key_2_configured ? 'Key saved securely on backend; enter to replace' : 'Enter a second key, ideally from a different Google project'}
+              onChange={(e) => setSettings({ ...settings, gemini_api_key_2: e.target.value })}
+              className="w-full h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-400"
+            />
+            <p className="text-[11px] text-zinc-400 leading-relaxed">When one key's daily quota is used up, ClipRank switches to the other and only stops if both are spent. Free-tier quotas are per Google project, so create the second key in a different project.</p>
+          </div>
+
+          {/* Groq and NVIDIA NIM: extra providers; AUTO moves to them when Gemini's quota is spent */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5"><KeyRound className="w-3.5 h-3.5 text-zinc-500" /><span>Groq API Key (Optional)</span></label>
+              <input aria-label="Groq API key" type="password" value={settings.groq_api_key || ''}
+                placeholder={settings.groq_api_key_configured ? 'Key saved securely on backend; enter to replace' : 'gsk_… from console.groq.com'}
+                onChange={(e) => setSettings({ ...settings, groq_api_key: e.target.value })}
+                className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-900 focus:outline-none" />
+              <input aria-label="Groq model" value={settings.groq_model ?? ''} placeholder="qwen/qwen3.8-27b"
+                onChange={(e) => setSettings({ ...settings, groq_model: e.target.value })}
+                className="h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] font-mono text-zinc-800 focus:outline-none" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5"><KeyRound className="w-3.5 h-3.5 text-zinc-500" /><span>NVIDIA NIM API Key (Optional)</span></label>
+              <input aria-label="NVIDIA NIM API key" type="password" value={settings.nvidia_api_key || ''}
+                placeholder={settings.nvidia_api_key_configured ? 'Key saved securely on backend; enter to replace' : 'nvapi-… from build.nvidia.com'}
+                onChange={(e) => setSettings({ ...settings, nvidia_api_key: e.target.value })}
+                className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-900 focus:outline-none" />
+              <input aria-label="NVIDIA NIM model" value={settings.nvidia_model ?? ''} placeholder="meta/llama-3.2-90b-vision-instruct"
+                onChange={(e) => setSettings({ ...settings, nvidia_model: e.target.value })}
+                className="h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[11px] font-mono text-zinc-800 focus:outline-none" />
+            </div>
+            <p className="md:col-span-2 text-[11px] text-zinc-400 leading-relaxed">In <b>Auto</b>, ClipRank tries Gemini first (every key, every fallback model), then Groq, then NVIDIA NIM, then OpenAI, moving on whenever one is out of quota. Groq and NIM review sampled frames rather than whole videos, and their judgments can differ from Gemini's; verification stays equally strict.</p>
+          </div>
+
           {/* OpenAI API Key */}
           <div className="flex flex-col gap-2">
             <label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5">
@@ -243,6 +307,17 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
                 placeholder="Your image-capable Gemini model" />
             </div>
 
+            <div className="flex flex-col gap-1.5 col-span-2">
+              <label className="text-xs font-medium text-zinc-700">Gemini fallback models (tried in order when quota is spent)</label>
+              <input
+                aria-label="Gemini fallback models"
+                value={settings.gemini_fallback_models ?? 'gemini-3.5-flash-lite, gemini-2.5-flash-lite, gemini-2.5-flash, gemini-3.5-flash'}
+                onChange={(e) => setSettings({ ...settings, gemini_fallback_models: e.target.value })}
+                className="h-10 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-xs font-mono text-zinc-800 focus:outline-none"
+                placeholder="Comma separated model ids; empty disables fallback" />
+              <p className="text-[11px] text-zinc-400 leading-relaxed">Quota is counted per model. For each model ClipRank tries every saved key, then moves to the next model. Models your account can't use are skipped automatically. Fallback models may judge differently from the primary, so verification stays strict but results can vary.</p>
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-zinc-700">Local Endpoint (Ollama)</label>
               <input
@@ -257,8 +332,9 @@ export const SettingsPage: React.FC<{ onSettingsUpdated: () => void }> = ({ onSe
           <div className="border-t border-zinc-100 pt-4 space-y-3">
             <p className="text-xs font-semibold">Vision connections</p>
             <p className="text-xs text-zinc-500">Enter your connection details, test image reading, then save. The app does not install or download local models.</p>
-            <div className="grid md:grid-cols-2 gap-3">{(['gemini', 'local'] as const).map(provider => <div key={provider} className="border border-zinc-200 rounded-xl p-4 space-y-2">
-              <p className="text-xs font-semibold">{provider === 'gemini' ? 'Gemini vision' : 'Ollama vision'}</p>
+            <div className="grid md:grid-cols-2 gap-3">{(['gemini', 'groq', 'nvidia', 'local'] as const).map(provider => <div key={provider} className="border border-zinc-200 rounded-xl p-4 space-y-2">
+              <p className="text-xs font-semibold">{({ gemini: 'Gemini vision', groq: 'Groq vision', nvidia: 'NVIDIA NIM vision', local: 'Ollama vision' } as const)[provider]}</p>
+              {provider === 'gemini' && connections?.gemini?.keys && <p className="text-[11px] text-zinc-500">Keys: {connections.gemini.keys.configured} saved · {connections.gemini.keys.available} usable now{connections.gemini.keys.exhausted ? ` · ${connections.gemini.keys.exhausted} resting (quota/rate limit)` : ''}</p>}
               <p className="text-xs text-zinc-500">{connections?.[provider]?.message || 'Ready for connection details.'}</p>
               {provider === 'local' && connections?.local?.installed_models?.length > 0 && <p className="text-[11px] text-zinc-500">Installed: {connections.local.installed_models.join(', ')}</p>}
               <button type="button" disabled={!!testingVision} onClick={() => testVision(provider)} className="text-xs font-semibold underline disabled:opacity-50">{testingVision === provider ? 'Testing image reading…' : 'Test vision connection'}</button>

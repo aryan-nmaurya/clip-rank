@@ -1,15 +1,33 @@
 import React, {useEffect,useState} from 'react';
 import {Compass,ArrowRight,ExternalLink,RefreshCw} from 'lucide-react';
 import {studioRequest} from '../api';
+import {StrictnessControl} from '../components/StrictnessControl';
 
 export function DiscoveryPage({onStartJob}:{onStartJob:(job:string,project:string)=>void}) {
   const [items,setItems]=useState<any[]>([]); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   const [warnings,setWarnings]=useState(0); const [funnel,setFunnel]=useState<any>(null);
-  useEffect(()=>{studioRequest('/opportunities').then(r=>setItems(r.opportunities)).catch(e=>setError(e.message));},[]);
+  const [run,setRun]=useState<any>(null);
+  const apply=(r:any)=>{
+    setRun(r);
+    if(Array.isArray(r.opportunities)&&r.opportunities.length)setItems(r.opportunities);
+    if(r.warnings)setWarnings(r.warnings.length);
+    if(r.funnel)setFunnel(r.funnel);
+    if(r.status==='failed')setError(r.message||'Discovery failed.');
+  };
+  useEffect(()=>{
+    studioRequest('/opportunities').then(r=>setItems(r.opportunities)).catch(e=>setError(e.message));
+    // Pick up a run that is already going (e.g. after switching tabs).
+    studioRequest('/discover/status').then(r=>{if(r.status==='running'){apply(r);setBusy(true);}}).catch(()=>{});
+  },[]);
+  useEffect(()=>{
+    if(!busy)return;
+    const timer=setInterval(()=>{studioRequest('/discover/status').then(r=>{apply(r);if(r.status!=='running')setBusy(false);}).catch(e=>{setError(e.message);setBusy(false);});},1500);
+    return()=>clearInterval(timer);
+  },[busy]);
   async function discover() {
-    setBusy(true);setError('');
-    try { const r=await studioRequest('/discover',{limit:30});setItems(r.opportunities);setWarnings(r.warnings.length);setFunnel(r.funnel); }
-    catch(e:any){setError(e.message);} finally{setBusy(false);}
+    setBusy(true);setError('');setRun(null);
+    try { apply(await studioRequest('/discover',{limit:30})); }
+    catch(e:any){setError(e.message);setBusy(false);}
   }
   async function produce(id:string,format='auto') {
     setBusy(true);setError('');
@@ -19,9 +37,14 @@ export function DiscoveryPage({onStartJob}:{onStartJob:(job:string,project:strin
   return <div className="flex-1 overflow-y-auto p-8"><div className="max-w-4xl mx-auto space-y-6 pb-16">
     <div className="flex items-center gap-3"><Compass className="text-cyan-700"/><div><h1 className="text-2xl font-bold">Viral Discovery</h1><p className="text-sm text-zinc-500">Find extraordinary visual moments worth turning into Shorts.</p></div></div>
     <div className="rounded-2xl bg-cyan-950 text-white p-6 flex flex-wrap items-center justify-between gap-4"><div><h2 className="font-semibold">Extreme, unbelievable & funny moments.</h2><p className="text-sm text-cyan-100 mt-2 max-w-xl">Judge the actual moment: instant interest, visible payoff, surprise, emotion and replay value. Choose a standalone clip, related ranking or commentary Short.</p></div><button disabled={busy} onClick={discover} className="bg-white text-cyan-950 px-5 py-3 rounded-xl font-semibold text-sm disabled:opacity-50"><RefreshCw className={`inline mr-2 w-4 h-4 ${busy?'animate-spin':''}`}/>{busy?'Working…':'Discover opportunities'}</button></div>
+    <StrictnessControl/>
     {error&&<p role="alert" className="bg-red-50 text-red-800 p-4 rounded-xl">{error}</p>}
     {funnel&&<p className="text-sm text-cyan-800">{funnel.discovered} found → {funnel.deep_analyzed} deeply analyzed → {funnel.verified} verified · Up to {funnel.finalists} finalists</p>}
-    {busy&&<p role="status" className="text-sm text-cyan-800">Searching source videos and reviewing actual footage. Downloads and visual verification can take several minutes.</p>}
+    {busy&&<div role="status" className="rounded-xl bg-cyan-50 border border-cyan-100 p-4 space-y-2">
+      <p className="text-sm font-medium text-cyan-900">{run?.message||'Starting…'}</p>
+      <div className="h-1.5 rounded-full bg-cyan-100 overflow-hidden"><div className="h-full bg-cyan-700 transition-all" style={{width:`${run?.stage==='analyzing'&&run.total?Math.max(8,Math.round(100*(run.analyzed||0)/run.total)):run?.stage==='searching'?6:2}%`}}/></div>
+      <p className="text-xs text-cyan-800">Results appear below as soon as each moment is verified. Searches run in parallel and stop early once enough strong moments are found.</p>
+    </div>}
     {warnings>0&&<p className="text-sm text-amber-800">{warnings} searches or clips could not pass discovery. Only visually verified moments are shown.</p>}
     <p className="text-xs text-zinc-500">Scores describe visual moments, not guaranteed views. You manage reuse rights; publication requires a confirmed copyright check.</p>
     {!items.length&&!busy&&<div className="bg-white border rounded-2xl p-10 text-center text-zinc-500">Discover opportunities to build your next original Short.</div>}

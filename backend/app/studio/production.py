@@ -18,7 +18,8 @@ from app.tts.pocket import PocketTTS,PROFILES as POCKET_PROFILES
 from app.tts.alignment import NarrationAlignmentError
 from app.tts.voice_engine import TTSEngine
 
-EDGE_VOICES={'Curious':'en-US-AriaNeural','Energetic':'en-US-GuyNeural','Tech Curious':'en-US-AriaNeural','Tech Energetic':'en-US-GuyNeural','Documentary':'en-GB-RyanNeural','Fast Explainer':'en-US-AriaNeural'}
+EDGE_VOICES={'Curious':'en-US-AriaNeural','Energetic':'en-US-GuyNeural','Tech Curious':'en-US-AriaNeural','Tech Energetic':'en-US-GuyNeural','Documentary':'en-GB-RyanNeural','Fast Explainer':'en-US-AriaNeural',
+    'Fast Entertainment':'en-US-GuyNeural','Cinematic':'en-GB-RyanNeural','Suspense':'en-GB-RyanNeural','Playful':'en-US-AriaNeural','Neutral':'en-US-GuyNeural'}
 
 
 async def final_review(provider,name,qc,script,timeline):

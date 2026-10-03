@@ -12,12 +12,16 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
   const [search, setSearch] = useState('');
   const [modeFilter, setModeFilter] = useState<'all' | 'viral' | 'ranking' | 'discovery' | 'movie' | 'autopilot'>('all');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   const fetchList = async () => {
     try {
       const data = await listProjects(modeFilter, search);
       setProjects(data);
-    } catch {} finally {
+      setLoadError('');
+    } catch (e: any) {
+      setLoadError(e.message || 'The library could not be loaded.');
+    } finally {
       setLoading(false);
     }
   };
@@ -32,7 +36,9 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
     try {
       await deleteProject(projectId);
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
-    } catch {}
+    } catch (e: any) {
+      setLoadError(e.message || 'The project could not be deleted.');
+    }
   };
 
   const formatTimeAgo = (dateStr: string) => {
@@ -86,6 +92,8 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({ onOpenProject }) => {
             ))}
           </div>
         </div>
+
+        {loadError && <p role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{loadError}</p>}
 
         {/* Projects List */}
         {loading ? (

@@ -1,4 +1,4 @@
-import { Project, Job, Settings, AIStatus, Diagnostics, YouTubeConnection, YouTubeUpload } from './types';
+import { Project, Job, Settings, AIStatus, Diagnostics, YouTubeConnection, YouTubeUpload, Health, StorageReport, ProductionTestState, ClipGates } from './types';
 
 const API_BASE = '/api';
 
@@ -42,6 +42,8 @@ export const getCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/$
 export const refreshCopyrightCheck = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/check`,{});
 export const confirmCopyrightCheck = (clipId:string,verdict:string,note:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/review`,{verdict,note});
 export const publishCopyrightCleared = (clipId:string) => youtubeRequest(`/copyright/${encodeURIComponent(clipId)}/publish`,{});
+export const reuploadYouTube = (clipId: string): Promise<{ status: string }> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}/reupload`, {});
+export const verifyYouTubeUpload = (clipId: string): Promise<YouTubeUpload | null> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}/verify`, {});
 export const uploadToYouTube = (clipId: string, payload: { title: string; description: string; privacy: string; made_for_kids: boolean }): Promise<YouTubeUpload> => youtubeRequest(`/uploads/${encodeURIComponent(clipId)}`, payload);
 
 export async function createViralProject(formData: FormData): Promise<{ project_id: string; job_id: string }> {
@@ -62,9 +64,11 @@ export async function createRankingProject(params: {
   ai_provider?: string;
   source_urls?: string[];
   narration?: boolean;
-  layout?: 'fill' | 'fit';
+  layout?: 'fill' | 'fit' | 'smart';
   segment_duration?: number;
   voice?: string;
+  variants?: 1 | 2;
+  cc_only?: boolean;
   source_platforms?: string[];
 }): Promise<{ project_id: string; job_id: string }> {
   const res = await fetch(`${API_BASE}/projects/ranking`, {
@@ -109,10 +113,12 @@ export async function getVisionConnections(): Promise<any> {
   return response.json();
 }
 
-export async function testVisionConnection(provider: 'gemini' | 'local', settings: Settings): Promise<{ passed: boolean; message: string }> {
+export async function testVisionConnection(provider: 'gemini' | 'local' | 'groq' | 'nvidia', settings: Settings): Promise<{ passed: boolean; message: string }> {
   const response = await fetch(`${API_BASE}/vision/test`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider, gemini_api_key: settings.gemini_api_key, gemini_model: settings.gemini_model,
+      gemini_api_key_2: settings.gemini_api_key_2, groq_api_key: settings.groq_api_key, groq_model: settings.groq_model || undefined,
+      nvidia_api_key: settings.nvidia_api_key, nvidia_model: settings.nvidia_model || undefined,
       local_endpoint: settings.local_endpoint, local_model: settings.local_model }),
   });
   if (!response.ok) throw new Error('Could not test vision. Check your connection settings.');
@@ -140,8 +146,15 @@ export async function getProject(projectId: string): Promise<Project> {
   return res.json();
 }
 
-export async function regenerateProject(projectId: string): Promise<{ job_id: string }> {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/regenerate`, { method: 'POST' });
+export interface Checkpoint { exists: boolean; stage?: string; verified?: number; judged?: number; sources?: number; pool_ready?: boolean; saved_at?: number }
+export async function getCheckpoint(projectId: string): Promise<Checkpoint> {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/checkpoint`);
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) return { exists: false };
+  return res.json();
+}
+
+export async function regenerateProject(projectId: string, fresh = false): Promise<{ job_id: string }> {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/regenerate${fresh ? '?fresh=true' : ''}`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to regenerate project');
   return res.json();
 }
@@ -208,3 +221,75 @@ export async function getDiagnostics(): Promise<Diagnostics> {
   if (!res.ok) throw new Error('Failed to fetch diagnostics');
   return res.json();
 }
+
+async function opsRequest(path: string, method: 'GET' | 'POST' = 'GET') {
+  const res = await fetch(`${API_BASE}${path}`, method === 'POST' ? { method, headers: { 'Content-Type': 'application/json' }, body: '{}' } : undefined);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : 'This request could not be completed.');
+  }
+  return res.json();
+}
+
+export const getHealth = (): Promise<Health> => opsRequest('/health');
+export const getStorage = (): Promise<StorageReport> => opsRequest('/storage');
+export const cleanupStorage = (): Promise<unknown> => opsRequest('/storage/cleanup', 'POST');
+export const startProductionTest = (): Promise<ProductionTestState> => opsRequest('/diagnostics/production-test', 'POST');
+export const getProductionTest = (): Promise<ProductionTestState> => opsRequest('/diagnostics/production-test');
+export const getClipGates = (clipId: string): Promise<ClipGates> => opsRequest(`/clips/${encodeURIComponent(clipId)}/gates`);
+export async function recordRights(projectId: string, payload: { basis: string; note: string; evidence_url?: string; creator?: string }): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/rights`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : 'The rights statement could not be saved.');
+  }
+  return res.json();
+}
+
+async function businessRequest(path: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', payload?: unknown) {
+  const res = await fetch(`${API_BASE}/business${path}`, method === 'GET' ? undefined : {
+    method, headers: { 'Content-Type': 'application/json' }, body: payload === undefined ? '{}' : JSON.stringify(payload) });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : 'This request could not be completed.');
+  }
+  return res.json();
+}
+export const getBusinessDashboard = (): Promise<any> => businessRequest('/dashboard');
+export const getLedger = (): Promise<{ entries: any[] }> => businessRequest('/ledger');
+export const addLedgerEntry = (entry: { kind: string; category: string; amount: number; note: string; occurred_on?: string }) => businessRequest('/ledger', 'POST', entry);
+export const deleteLedgerEntry = (id: number) => businessRequest(`/ledger/${id}`, 'DELETE');
+export const updateBusinessConfig = (config: Record<string, unknown>) => businessRequest('/config', 'POST', config);
+export const getAffiliates = (): Promise<{ affiliates: any[] }> => businessRequest('/affiliates');
+export const addAffiliate = (payload: { brand: string; url: string; categories: string[]; disclosure: string }) => businessRequest('/affiliates', 'POST', payload);
+export const deleteAffiliate = (id: number) => businessRequest(`/affiliates/${id}`, 'DELETE');
+export const refreshInsights = (): Promise<any> => businessRequest('/insights/refresh', 'POST');
+export const collectAnalytics = (): Promise<any> => businessRequest('/analytics/collect', 'POST');
+
+export interface TopicSuggestion { topic: string; pillar: string; breadth: 'broad' | 'narrow' }
+export interface TopicAnalysis { topic: string; breadth: 'broad' | 'medium' | 'narrow' | 'unknown'; reasons: string[]; broader: string | null }
+export async function getRankingTopics(breadth: 'all' | 'broad' | 'narrow' = 'all'): Promise<TopicSuggestion[]> {
+  const res = await fetch(`${API_BASE}/ranking/topics?breadth=${breadth}`);
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('json'))
+    throw new Error('Topic suggestions need the latest ClipRank backend. Stop the app and start it again with ./run_app.sh.');
+  return (await res.json()).topics;
+}
+export async function analyzeTopic(topic: string): Promise<TopicAnalysis> {
+  const res = await fetch(`${API_BASE}/ranking/topics/analyze?topic=${encodeURIComponent(topic)}`);
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) throw new Error('Could not analyze the topic.');
+  return res.json();
+}
+
+async function autoShortsRequest(path: string, payload?: unknown) {
+  const res = await fetch(`${API_BASE}/auto-shorts${path}`, payload === undefined ? undefined : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : 'Auto Shorts needs the latest ClipRank backend. Stop the app and start it again with ./run_app.sh.');
+  }
+  return res.json();
+}
+export const startAutoShorts = (payload: { count: number; platforms: string[]; niche: string; topic?: string; voice?: string; mode?: string }) => autoShortsRequest('', payload);
+export const getAutoShorts = (): Promise<any> => autoShortsRequest('/status');
+export const cancelAutoShorts = (): Promise<any> => autoShortsRequest('/cancel', {});

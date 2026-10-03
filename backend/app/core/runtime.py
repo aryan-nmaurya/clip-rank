@@ -5,6 +5,8 @@ import subprocess
 import threading
 import time
 
+from app.core.failures import ProcessError, redact
+
 _cancel_event = contextvars.ContextVar("media_cancel_event", default=None)
 
 
@@ -48,7 +50,7 @@ def run_process(cmd, timeout=600, include_stderr=False):
             except subprocess.TimeoutExpired:
                 continue
         if process.returncode:
-            raise RuntimeError(stderr.decode(errors="replace")[-2400:] or "Media operation failed")
+            raise ProcessError(str(cmd[0]), process.returncode, redact(stderr.decode(errors="replace")[-2400:]))
         return stdout + stderr if include_stderr else stdout
     except BaseException:
         process.terminate()
