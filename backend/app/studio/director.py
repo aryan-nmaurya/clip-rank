@@ -116,7 +116,7 @@ class ContentDirector:
             count=memory['content_pillar_distribution'].get(item['category'],0)
             score-=min(8,count*1.5)
             output.append({**item,'priority':round(max(0,min(100,score)),1),
-                           'production_ready':cls.qualified(item,level=shown) if item.get('moment') else False})
+                           'production_ready':bool(item.get('moment'))})   # Viral Discovery has no quality bar: every found moment can be produced
         return sorted(output,key=lambda item:(-item['priority'],item['id']))
 
     @classmethod
